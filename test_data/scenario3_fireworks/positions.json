@@ -1,0 +1,62 @@
+{
+  "description": "Fireworks display - L-shaped camera array in park",
+  "speed_of_sound": 345.0,
+  "reference_point": {
+    "lat": 41.892456,
+    "lon": -87.612345,
+    "description": "Millennium Park - fireworks show"
+  },
+  "mics": [
+    {
+      "file": "cam1.mp4",
+      "lat": 41.892456,
+      "lon": -87.612345,
+      "height_m": 2.0,
+      "description": "Stage left camera"
+    },
+    {
+      "file": "cam2.mp4",
+      "lat": 41.892656,
+      "lon": -87.612345,
+      "height_m": 2.2,
+      "description": "Center stage camera"
+    },
+    {
+      "file": "cam3.mp4",
+      "lat": 41.892856,
+      "lon": -87.612345,
+      "height_m": 1.8,
+      "description": "Stage right camera"
+    },
+    {
+      "file": "cam4.mp4",
+      "lat": 41.892456,
+      "lon": -87.612145,
+      "height_m": 3.0,
+      "description": "Audience left camera"
+    },
+    {
+      "file": "cam5.mp4",
+      "lat": 41.892456,
+      "lon": -87.611945,
+      "height_m": 2.5,
+      "description": "Audience center camera"
+    },
+    {
+      "file": "cam6.mp4",
+      "lat": 41.892456,
+      "lon": -87.611745,
+      "height_m": 2.8,
+      "description": "Audience right camera"
+    }
+  ],
+  "event": {
+    "type": "fireworks",
+    "estimated_location": {
+      "lat": 41.892756,
+      "lon": -87.612045,
+      "description": "Above stage - aerial firework burst"
+    },
+    "time_utc": "2024-07-04T21:15:42.890Z"
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "description": "Industrial explosion - linear array of surveillance cameras",
+  "temperature_C": 15.0,
+  "reference_point": {
+    "lat": 41.875431,
+    "lon": -87.641234,
+    "description": "Industrial district - factory perimeter"
+  },
+  "mics": [
+    {
+      "file": "cam1.mp4",
+      "lat": 41.875431,
+      "lon": -87.641234,
+      "height_m": 6.0,
+      "description": "Main gate camera"
+    },
+    {
+      "file": "cam2.mp4",
+      "lat": 41.875631,
+      "lon": -87.641234,
+      "height_m": 5.5,
+      "description": "Perimeter camera 1"
+    },
+    {
+      "file": "cam3.mp4",
+      "lat": 41.875831,
+      "lon": -87.641234,
+      "height_m": 6.2,
+      "description": "Perimeter camera 2"
+    },
+    {
+      "file": "cam4.mp4",
+      "lat": 41.876031,
+      "lon": -87.641234,
+      "height_m": 5.8,
+      "description": "Loading dock camera"
+    },
+    {
+      "file": "cam5.mp4",
+      "lat": 41.876231,
+      "lon": -87.641234,
+      "height_m": 7.0,
+      "description": "Storage area camera"
+    }
+  ],
+  "event": {
+    "type": "explosion",
+    "estimated_location": {
+      "lat": 41.875931,
+      "lon": -87.641134,
+      "description": "Storage building - industrial accident"
+    },
+    "time_utc": "2024-02-08T09:45:23.120Z"
+  }
+}

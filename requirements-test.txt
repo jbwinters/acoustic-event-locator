@@ -1,0 +1,24 @@
+# Testing dependencies for event location detector
+
+# Core testing framework
+pytest>=6.0.0
+pytest-cov>=2.10.0
+pytest-mock>=3.6.0
+pytest-timeout>=1.4.0
+
+# Core dependencies (same as main project)
+numpy>=1.20.0
+scipy>=1.7.0
+soundfile>=0.10.0
+matplotlib>=3.3.0
+
+# Additional testing utilities
+pytest-xdist>=2.5.0  # For parallel test execution
+pytest-benchmark>=3.4.0  # For performance testing
+pytest-html>=3.1.0  # For HTML test reports
+
+# For mocking subprocess calls (ffmpeg testing)
+responses>=0.18.0
+
+# Optional: for test data generation
+Pillow>=8.0.0  # If we need to generate test images

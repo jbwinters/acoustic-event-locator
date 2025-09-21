@@ -1,0 +1,36 @@
+# Python virtual environment
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Test and coverage artifacts
+.coverage
+.pytest_cache/
+.tox/
+htmlcov/
+
+# Output directories
+out/
+*.wav
+*.mp4
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment files
+.env
+.envrc
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# Claude Code settings (keep local only)
+.claude/settings.local.json

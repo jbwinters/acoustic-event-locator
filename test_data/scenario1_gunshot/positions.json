@@ -1,0 +1,48 @@
+{
+  "description": "Urban gunshot scenario - 4 cameras in square formation",
+  "temperature_C": 20.0,
+  "reference_point": {
+    "lat": 41.881832,
+    "lon": -87.623177,
+    "description": "Downtown Chicago intersection"
+  },
+  "mics": [
+    {
+      "file": "cam1.mp4",
+      "lat": 41.881832,
+      "lon": -87.623177,
+      "height_m": 3.0,
+      "description": "Northwest corner - traffic camera"
+    },
+    {
+      "file": "cam2.mp4", 
+      "lat": 41.881832,
+      "lon": -87.622977,
+      "height_m": 3.5,
+      "description": "Northeast corner - security camera"
+    },
+    {
+      "file": "cam3.mp4",
+      "lat": 41.881632,
+      "lon": -87.622977,
+      "height_m": 2.8,
+      "description": "Southeast corner - doorbell camera"
+    },
+    {
+      "file": "cam4.mp4",
+      "lat": 41.881632,
+      "lon": -87.623177,
+      "height_m": 4.2,
+      "description": "Southwest corner - shop security"
+    }
+  ],
+  "event": {
+    "type": "gunshot",
+    "estimated_location": {
+      "lat": 41.881732,
+      "lon": -87.623077,
+      "description": "Center of intersection - single gunshot"
+    },
+    "time_utc": "2024-01-15T14:23:17.450Z"
+  }
+}
