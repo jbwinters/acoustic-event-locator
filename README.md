@@ -8,6 +8,8 @@ Acoustic event localization system using Time Difference of Arrival (TDOA) multi
 
 ![Demo](docs/demo_diagram.svg)
 
+The diagram above is generated from the included synthetic fireworks scenario with `python docs/generate_demo_diagram.py`.
+
 ## Features
 
 🎯 **Acoustic Source Localization**

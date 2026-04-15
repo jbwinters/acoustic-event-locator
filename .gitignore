@@ -34,3 +34,6 @@ Thumbs.db
 
 # Claude Code settings (keep local only)
 .claude/settings.local.json
+
+# Local research notes (keep local only)
+docs/background_chats.md
