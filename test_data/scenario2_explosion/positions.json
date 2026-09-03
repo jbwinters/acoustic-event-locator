@@ -45,10 +45,11 @@
   ],
   "event": {
     "type": "explosion",
-    "estimated_location": {
+    "true_location": {
       "lat": 41.875931,
       "lon": -87.641134,
-      "description": "Storage building - industrial accident"
+      "description": "Storage building - industrial accident",
+      "height_m": 0.0
     },
     "time_utc": "2024-02-08T09:45:23.120Z"
   }

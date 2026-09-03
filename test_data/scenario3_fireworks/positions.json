@@ -52,10 +52,11 @@
   ],
   "event": {
     "type": "fireworks",
-    "estimated_location": {
+    "true_location": {
       "lat": 41.892756,
       "lon": -87.612045,
-      "description": "Above stage - aerial firework burst"
+      "description": "Aerial firework burst 25 m above the stage",
+      "height_m": 25.0
     },
     "time_utc": "2024-07-04T21:15:42.890Z"
   }

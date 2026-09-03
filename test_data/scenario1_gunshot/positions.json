@@ -15,7 +15,7 @@
       "description": "Northwest corner - traffic camera"
     },
     {
-      "file": "cam2.mp4", 
+      "file": "cam2.mp4",
       "lat": 41.881832,
       "lon": -87.622977,
       "height_m": 3.5,
@@ -38,10 +38,11 @@
   ],
   "event": {
     "type": "gunshot",
-    "estimated_location": {
-      "lat": 41.881732,
-      "lon": -87.623077,
-      "description": "Center of intersection - single gunshot"
+    "true_location": {
+      "lat": 41.881762,
+      "lon": -87.623037,
+      "description": "Near the southeast corner of the intersection - single gunshot",
+      "height_m": 1.2
     },
     "time_utc": "2024-01-15T14:23:17.450Z"
   }

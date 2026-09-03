@@ -1,281 +1,272 @@
 #!/usr/bin/env python3
 """
-Generate realistic synthetic audio data for testing the event location detector.
-Creates MP4 video files with audio tracks containing acoustic events at known times.
+Synthesize test recordings for the acoustic event locator.
+
+For each scenario directory under test_data/ (a positions.json with an "event" block) this
+writes one audio track per recording plus metadata.json holding the ground truth in the same
+local frame that locate_event.py uses (origin = "reference"/"reference_point", else the
+centroid of the recordings).
+
+Physics included
+  * exact (fractional-sample) propagation delays from the true source to each recording
+  * 1/r amplitude spreading, so the signal-to-noise ratio falls with distance
+  * independent background noise per recording
+  * per-recording clock offsets (each recording runs on its own clock)
+  * optional early reflections (echoes) with random delays and gains per recording
+Not modelled: wind, temperature gradients, microphone directivity, clipping/AGC.
+
+Output format: WAV by default (no external tools needed). --format mp4 wraps each track in an
+MP4 with a black video track and needs ffmpeg. locate_event.py reads either.
+
+The synthesis functions (event_waveform, render_track, synthesize_scenario) are also used by
+the unit tests.
 """
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
 
 import numpy as np
 import soundfile as sf
-import subprocess
-import json
-import os
-import argparse
-from pathlib import Path
+from scipy.signal import butter, sosfilt
 
-# Import functions from the main script
-import sys
-sys.path.append('.')
-from locate_event import latlon_to_local_xy, load_positions
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import locate_event as le  # noqa: E402
+
+EVENT_KINDS = ("gunshot", "explosion", "fireworks")
+DEFAULT_CLOCK_OFFSETS_MS = [0.0] * 8  # synchronised by default; see --clock_offsets_ms / --random_clock_ms
+SCENARIOS = ("scenario1_gunshot", "scenario2_explosion", "scenario3_fireworks")
 
 
-def generate_impulse_signal(fs=48000, duration=10.0, impulse_time=5.0, noise_level=0.01):
-    """Generate a signal with an impulse at a specified time."""
-    n_samples = int(duration * fs)
-    signal = noise_level * np.random.randn(n_samples)
-    
-    # Add impulse
-    impulse_idx = int(impulse_time * fs)
-    if 0 <= impulse_idx < n_samples:
-        # Create a sharp impulse with some ringing
-        impulse_duration = int(0.01 * fs)  # 10ms
-        t_impulse = np.arange(impulse_duration) / fs
-        impulse = np.exp(-t_impulse * 100) * np.sin(2 * np.pi * 200 * t_impulse)
-        
-        end_idx = min(impulse_idx + impulse_duration, n_samples)
-        signal[impulse_idx:end_idx] += 0.5 * impulse[:end_idx-impulse_idx]
-    
-    return signal
+# ------------------------------ Synthesis ------------------------------
 
 
-def generate_explosion_signal(fs=48000, duration=10.0, event_time=5.0, noise_level=0.01):
-    """Generate a signal with an explosion-like event."""
-    n_samples = int(duration * fs)
-    signal = noise_level * np.random.randn(n_samples)
-    
-    # Add explosion - longer duration with multiple frequency components
-    event_idx = int(event_time * fs)
-    if 0 <= event_idx < n_samples:
-        explosion_duration = int(0.5 * fs)  # 500ms
-        t_exp = np.arange(explosion_duration) / fs
-        
-        # Multiple frequency components with decay
-        explosion = (
-            0.8 * np.exp(-t_exp * 5) * np.sin(2 * np.pi * 80 * t_exp) +
-            0.6 * np.exp(-t_exp * 10) * np.sin(2 * np.pi * 150 * t_exp) +
-            0.4 * np.exp(-t_exp * 20) * np.sin(2 * np.pi * 300 * t_exp)
-        )
-        
-        end_idx = min(event_idx + explosion_duration, n_samples)
-        signal[event_idx:end_idx] += explosion[:end_idx-event_idx]
-    
-    return signal
-
-
-def generate_firework_signal(fs=48000, duration=10.0, event_time=5.0, noise_level=0.01):
-    """Generate a signal with a firework burst."""
-    n_samples = int(duration * fs)
-    signal = noise_level * np.random.randn(n_samples)
-    
-    # Add firework burst - sharp crack followed by crackles
-    event_idx = int(event_time * fs)
-    if 0 <= event_idx < n_samples:
-        # Initial crack
-        crack_duration = int(0.02 * fs)  # 20ms
-        t_crack = np.arange(crack_duration) / fs
-        crack = 0.7 * np.exp(-t_crack * 200) * np.sin(2 * np.pi * 500 * t_crack)
-        
-        # Add the crack
-        end_idx = min(event_idx + crack_duration, n_samples)
-        signal[event_idx:end_idx] += crack[:end_idx-event_idx]
-        
-        # Add some crackling afterwards
-        crackle_start = event_idx + crack_duration
-        crackle_duration = int(1.0 * fs)  # 1 second of crackling
-        if crackle_start < n_samples:
-            crackle_end = min(crackle_start + crackle_duration, n_samples)
-            n_crackles = crackle_end - crackle_start
-            crackles = 0.2 * np.random.exponential(0.1, n_crackles) * np.random.randn(n_crackles)
-            signal[crackle_start:crackle_end] += crackles
-    
-    return signal
-
-
-def calculate_arrival_times(source_pos, mic_positions, c=343.0):
-    """Calculate arrival times for each microphone."""
-    distances = np.linalg.norm(mic_positions - source_pos[np.newaxis, :], axis=1)
-    travel_times = distances / c
-    return travel_times
-
-
-def generate_scenario_audio(scenario_dir, event_type='gunshot', source_pos=None, clock_offsets=None):
-    """Generate audio files for a specific scenario."""
-    positions_file = os.path.join(scenario_dir, 'positions.json')
-    
-    # Read positions JSON directly (can't use load_positions since videos don't exist yet)
-    with open(positions_file, 'r') as f:
-        raw_json = json.load(f)
-    
-    # Extract reference point
-    if 'reference_point' in raw_json:
-        lat0 = raw_json['reference_point']['lat']
-        lon0 = raw_json['reference_point']['lon']
+def event_waveform(kind: str, fs: int, rng: np.random.Generator) -> np.ndarray:
+    """Event pressure waveform with its onset at index 0, normalised to peak 1."""
+    if kind == "gunshot":
+        n = int(0.06 * fs)
+        t = np.arange(n) / fs
+        burst = rng.standard_normal(n) * np.exp(-t / 0.003)  # broadband muzzle blast
+        blast = np.sin(2 * np.pi * 180 * t) * np.exp(-t / 0.008)  # low-frequency push
+        w = burst + 0.8 * blast
+    elif kind == "explosion":
+        n = int(1.0 * fs)
+        t = np.arange(n) / fs
+        sos = butter(2, [40 / (fs / 2), 1500 / (fs / 2)], btype="band", output="sos")
+        rumble = sosfilt(sos, rng.standard_normal(n)) * np.exp(-t / 0.15)
+        front = rng.standard_normal(n) * np.exp(-t / 0.01)  # shock front
+        w = front + 3.0 * rumble
+    elif kind == "fireworks":
+        n = int(1.3 * fs)
+        w = np.zeros(n)
+        nc = int(0.015 * fs)
+        w[:nc] = rng.standard_normal(nc) * np.exp(-np.arange(nc) / fs / 0.003)  # burst report
+        m = int(0.003 * fs)
+        for _ in range(40):  # crackling stars
+            k = int(rng.uniform(0.05, 1.1) * fs)
+            w[k : k + m] += rng.uniform(0.05, 0.35) * rng.standard_normal(m) * np.exp(-np.arange(m) / fs / 0.001)
     else:
-        # Calculate mean of mic positions
-        lats = [mic['lat'] for mic in raw_json['mics']]
-        lons = [mic['lon'] for mic in raw_json['mics']]
-        lat0 = sum(lats) / len(lats)
-        lon0 = sum(lons) / len(lons)
-    
-    # Get speed of sound
-    if 'speed_of_sound' in raw_json:
-        c = raw_json['speed_of_sound']
-    elif 'temperature_C' in raw_json:
-        c = 331.4 + 0.6 * raw_json['temperature_C']
-    else:
-        c = 343.0  # Default at 20°C
-    
-    # Convert mic positions to local coordinates
-    mic_positions = []
-    mic_filenames = []
-    for mic_data in raw_json['mics']:
-        x, y = latlon_to_local_xy(mic_data['lat'], mic_data['lon'], lat0, lon0)
-        mic_positions.append([x, y])
-        mic_filenames.append(mic_data['file'])
-    
-    mic_positions = np.array(mic_positions)
-    
-    # Use provided source position or estimate from JSON
-    if source_pos is None:
-        if 'event' in raw_json and 'estimated_location' in raw_json['event']:
-            event_lat = raw_json['event']['estimated_location']['lat']
-            event_lon = raw_json['event']['estimated_location']['lon']
-            source_x, source_y = latlon_to_local_xy(event_lat, event_lon, lat0, lon0)
-            source_pos = np.array([source_x, source_y])
-        else:
-            # Default to center of mic array
-            source_pos = np.mean(mic_positions, axis=0)
-    
-    # Generate clock offsets if not provided
-    if clock_offsets is None:
-        clock_offsets = np.array([0.0, 0.002, -0.001, 0.0015, -0.0005, 0.001])[:len(mic_filenames)]
-    
-    # Calculate true arrival times
-    arrival_times = calculate_arrival_times(source_pos, mic_positions, c)
-    
-    # Audio parameters
-    fs = 48000
-    duration = 10.0
-    event_time = 5.0  # Event occurs at 5 seconds
-    
-    print(f"Generating audio for {len(mic_filenames)} microphones in {scenario_dir}")
-    print(f"Source position: ({source_pos[0]:.1f}, {source_pos[1]:.1f}) m")
-    print(f"Speed of sound: {c:.1f} m/s")
-    
-    # Generate signal for each microphone
-    for i, filename in enumerate(mic_filenames):
-        print(f"  Generating {filename}...")
-        
-        # Calculate when the event arrives at this microphone
-        mic_event_time = event_time + arrival_times[i] + clock_offsets[i]
-        
-        # Generate appropriate signal type
-        if event_type == 'gunshot':
-            signal = generate_impulse_signal(fs, duration, mic_event_time)
-        elif event_type == 'explosion':
-            signal = generate_explosion_signal(fs, duration, mic_event_time)
-        elif event_type == 'fireworks':
-            signal = generate_firework_signal(fs, duration, mic_event_time)
-        else:
-            signal = generate_impulse_signal(fs, duration, mic_event_time)
-        
-        # Add distance-based attenuation
-        distance = np.linalg.norm(mic_positions[i] - source_pos)
-        attenuation = 1.0 / (1.0 + distance / 100.0)  # Simple distance attenuation
-        signal *= attenuation
-        
-        # Save as temporary WAV file
-        wav_path = os.path.join(scenario_dir, f'temp_{filename}.wav')
-        sf.write(wav_path, signal, fs)
-        
-        # Convert to MP4 using FFmpeg
-        mp4_path = os.path.join(scenario_dir, filename)
-        cmd = [
-            'ffmpeg', '-y',  # Overwrite existing files
-            '-f', 'lavfi', '-i', f'color=black:size=640x480:duration={duration}:rate=30',  # Black video
-            '-i', wav_path,  # Audio input
-            '-c:v', 'libx264', '-c:a', 'aac',  # Codecs
-            '-shortest',  # End when shortest stream ends
-            mp4_path
-        ]
-        
-        try:
-            subprocess.run(cmd, check=True, capture_output=True)
-            print(f"    Created {mp4_path}")
-            
-            # Clean up temporary WAV file
-            os.remove(wav_path)
-            
-        except subprocess.CalledProcessError as e:
-            print(f"    Error creating {mp4_path}: {e}")
-            print(f"    FFmpeg output: {e.stderr.decode()}")
-    
-    # Save metadata about the generated scenario
-    metadata = {
-        'source_position_m': source_pos.tolist(),
-        'microphone_positions_m': mic_positions.tolist(),
-        'clock_offsets_s': clock_offsets[:len(mic_filenames)].tolist(),
-        'arrival_times_s': arrival_times.tolist(),
-        'event_time_s': event_time,
-        'speed_of_sound_ms': c,
-        'sample_rate_hz': fs,
-        'duration_s': duration,
-        'event_type': event_type
+        raise ValueError(f"unknown event kind {kind!r}; choose from {EVENT_KINDS}")
+    return w / np.max(np.abs(w))
+
+
+def fractional_delay(x: np.ndarray, delay_samples: float) -> np.ndarray:
+    """Band-limited (sinc) delay of x by a possibly fractional number of samples."""
+    n = len(x)
+    f = np.fft.rfftfreq(n)
+    return np.fft.irfft(np.fft.rfft(x) * np.exp(-2j * np.pi * f * delay_samples), n=n)
+
+
+def render_track(event, fs, duration_s, arrival_s, gain, noise_rms, rng, reflections=()):
+    """Place `event` so its onset is at arrival_s (fractional sample accurate), scaled by gain,
+    add reflections [(delay_s, relative_gain), ...] and white noise. Returns (track, clean)."""
+    n = int(round(duration_s * fs))
+    k = int(np.floor(arrival_s * fs))
+    frac = arrival_s * fs - k
+    clean = np.zeros(n)
+
+    def place(k0, g):
+        a, b = max(0, k0), min(n, k0 + len(event))
+        if b > a:
+            clean[a:b] += g * event[a - k0 : b - k0]
+
+    place(k, gain)
+    for d_s, g_r in reflections:
+        place(k + int(round(d_s * fs)), gain * g_r)
+    if frac > 0:
+        clean = fractional_delay(clean, frac)
+    return clean + noise_rms * rng.standard_normal(n), clean
+
+
+def synthesize_scenario(
+    XYZ,
+    source_xyz,
+    c,
+    kind="gunshot",
+    fs=48000,
+    duration_s=10.0,
+    emission_s=5.0,
+    clock_offsets_s=None,
+    noise_rms=0.003,
+    level_at_10m=0.5,
+    reflections=True,
+    rng=None,
+):
+    """Synthesize one track per recording. Returns (tracks, truth dict)."""
+    rng = np.random.default_rng(0) if rng is None else rng
+    XYZ = np.asarray(XYZ, dtype=float)
+    source_xyz = np.asarray(source_xyz, dtype=float)
+    M = len(XYZ)
+    clock = np.zeros(M) if clock_offsets_s is None else np.asarray(clock_offsets_s, dtype=float)[:M]
+    if len(clock) < M:
+        clock = np.concatenate([clock, np.zeros(M - len(clock))])
+    d = np.linalg.norm(XYZ - source_xyz, axis=1)
+    t_true = emission_s + d / c + clock
+    event = event_waveform(kind, fs, rng)
+    tracks, snr_db, refl_all = [], [], []
+    for i in range(M):
+        gain = level_at_10m * 10.0 / max(d[i], 1.0)
+        refl = []
+        if reflections:
+            for _ in range(int(rng.integers(1, 4))):
+                refl.append((float(rng.uniform(0.008, 0.06)), float(rng.uniform(0.15, 0.5))))
+        x, clean = render_track(event, fs, duration_s, t_true[i], gain, noise_rms, rng, refl)
+        tracks.append(x)
+        snr_db.append(float(20 * np.log10(np.max(np.abs(clean)) / noise_rms)))
+        refl_all.append(refl)
+    truth = {
+        "event_type": kind,
+        "source_position_m": [float(source_xyz[0]), float(source_xyz[1])],
+        "source_height_m": float(source_xyz[2]),
+        "microphone_positions_m": XYZ.tolist(),
+        "clock_offsets_s": clock.tolist(),
+        "arrival_times_s": t_true.tolist(),
+        "distances_m": d.tolist(),
+        "emission_time_s": float(emission_s),
+        "speed_of_sound_ms": float(c),
+        "sample_rate_hz": int(fs),
+        "duration_s": float(duration_s),
+        "noise_rms": float(noise_rms),
+        "snr_db": snr_db,
+        "reflections": refl_all,
     }
-    
-    metadata_path = os.path.join(scenario_dir, 'metadata.json')
-    with open(metadata_path, 'w') as f:
-        json.dump(metadata, f, indent=2)
-    
-    print(f"  Metadata saved to {metadata_path}")
-    print()
+    return tracks, truth
 
 
-def main():
-    parser = argparse.ArgumentParser(description='Generate test data for event location detector')
-    parser.add_argument('--scenarios', nargs='+', 
-                       choices=['scenario1_gunshot', 'scenario2_explosion', 'scenario3_fireworks', 'all'],
-                       default=['all'],
-                       help='Which scenarios to generate')
-    
-    args = parser.parse_args()
-    
-    # Ensure we have ffmpeg
-    try:
-        subprocess.run(['ffmpeg', '-version'], capture_output=True, check=True)
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        print("Error: FFmpeg is required but not found. Please install FFmpeg.")
+# ------------------------------ Scenario files ------------------------------
+
+
+def load_scenario(scenario_dir: str):
+    J = le.read_json(os.path.join(scenario_dir, "positions.json"))
+    mics, (lat0, lon0), c = le.parse_positions(J)
+    XYZ = le.mic_local_xyz(mics, lat0, lon0)
+    ev = J.get("event", {})
+    loc = ev.get("true_location") or ev.get("estimated_location")
+    if loc is None:
+        raise ValueError(f"{scenario_dir}: positions.json needs event.true_location")
+    sx, sy = le.latlon_to_local_xy(float(loc["lat"]), float(loc["lon"]), lat0, lon0)
+    source = np.array([sx, sy, float(loc.get("height_m", 0.0))])
+    kind = ev.get("type", "gunshot")
+    return J, mics, (lat0, lon0), c, XYZ, source, kind
+
+
+def write_wav(path: str, x: np.ndarray, fs: int):
+    peak = float(np.max(np.abs(x)))
+    if peak > 0.999:
+        print(f"    note: {os.path.basename(path)} peaks at {peak:.2f}, clipping to +-1")
+        x = np.clip(x, -0.999, 0.999)
+    sf.write(path, x.astype(np.float32), fs, subtype="PCM_16")
+
+
+def wrap_mp4(wav_path: str, mp4_path: str, duration_s: float):
+    cmd = [
+        "ffmpeg", "-y", "-f", "lavfi", "-i", f"color=black:size=320x240:duration={duration_s}:rate=10",
+        "-i", wav_path, "-c:v", "libx264", "-c:a", "aac", "-b:a", "192k", "-shortest", mp4_path,
+    ]
+    subprocess.run(cmd, check=True, capture_output=True)
+
+
+def generate_scenario(scenario_dir, fmt="wav", seed=0, noise_rms=0.003, clock_offsets_ms=None,
+                      random_clock_ms=None, reflections=True, duration_s=10.0, emission_s=5.0, level=0.5):
+    J, mics, (lat0, lon0), c, XYZ, source, kind = load_scenario(scenario_dir)
+    rng = np.random.default_rng(seed)
+    M = len(mics)
+    if random_clock_ms is not None:
+        clock = rng.normal(0.0, random_clock_ms / 1000.0, M)
+    else:
+        ms = DEFAULT_CLOCK_OFFSETS_MS if clock_offsets_ms is None else clock_offsets_ms
+        clock = np.array(ms, dtype=float)[:M] / 1000.0
+    tracks, truth = synthesize_scenario(
+        XYZ, source, c, kind, fs=48000, duration_s=duration_s, emission_s=emission_s,
+        clock_offsets_s=clock, noise_rms=noise_rms, level_at_10m=level, reflections=reflections, rng=rng,
+    )
+    print(f"{os.path.basename(scenario_dir)}: {kind}, {M} recordings, c={c:.1f} m/s, source=({source[0]:.1f}, {source[1]:.1f}, {source[2]:.1f}) m")
+    files = []
+    for i, m in enumerate(mics):
+        stem = os.path.splitext(m.file)[0]
+        wav_path = os.path.join(scenario_dir, stem + ".wav")
+        write_wav(wav_path, tracks[i], 48000)
+        out_name = stem + ".wav"
+        if fmt == "mp4":
+            mp4_path = os.path.join(scenario_dir, stem + ".mp4")
+            wrap_mp4(wav_path, mp4_path, duration_s)
+            os.remove(wav_path)
+            out_name = stem + ".mp4"
+        files.append(out_name)
+        print(f"  {out_name:12s} d={truth['distances_m'][i]:6.1f} m  snr={truth['snr_db'][i]:5.1f} dB  clock={clock[i]*1000:+.1f} ms  arrival={truth['arrival_times_s'][i]:.6f} s")
+    lat_s, lon_s = le.local_xy_to_latlon(source[0], source[1], lat0, lon0)
+    truth.update({
+        "files": files,
+        "format": fmt,
+        "seed": seed,
+        "source_latlon": {"lat": lat_s, "lon": lon_s},
+        "local_frame": {"origin_lat": lat0, "origin_lon": lon0},
+    })
+    with open(os.path.join(scenario_dir, "metadata.json"), "w") as f:
+        json.dump(truth, f, indent=2)
+    return truth
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description="Generate synthetic test recordings.")
+    ap.add_argument("--scenarios", nargs="+", default=["all"], help="Scenario directory names under test_data/, or 'all'.")
+    ap.add_argument("--format", choices=("auto", "wav", "mp4"), default="auto", help="auto = mp4 if ffmpeg is available, else wav.")
+    ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--noise_rms", type=float, default=0.003, help="Background noise RMS (full scale = 1; 0.003 is about -50 dBFS).")
+    ap.add_argument("--clock_offsets_ms", type=float, nargs="+", default=None, help="Per-recording clock offsets (ms).")
+    ap.add_argument("--random_clock_ms", type=float, default=None, help="Draw clock offsets from N(0, sigma) instead.")
+    ap.add_argument("--no_reflections", action="store_true")
+    ap.add_argument("--duration_s", type=float, default=10.0)
+    ap.add_argument("--emission_s", type=float, default=5.0)
+    ap.add_argument("--level", type=float, default=0.5, help="Peak amplitude at 10 m (full scale = 1).")
+    args = ap.parse_args(argv)
+
+    fmt = args.format
+    if fmt == "auto":
+        fmt = "mp4" if shutil.which("ffmpeg") else "wav"
+        if fmt == "wav":
+            print("ffmpeg not found: writing WAV tracks (locate_event.py reads them directly)")
+    elif fmt == "mp4" and not shutil.which("ffmpeg"):
+        print("Error: --format mp4 needs ffmpeg on PATH")
         return 1
-    
-    scenarios = args.scenarios
-    if 'all' in scenarios:
-        scenarios = ['scenario1_gunshot', 'scenario2_explosion', 'scenario3_fireworks']
-    
-    base_dir = 'test_data'
-    
-    for scenario in scenarios:
-        scenario_dir = os.path.join(base_dir, scenario)
-        if not os.path.exists(scenario_dir):
-            print(f"Warning: {scenario_dir} does not exist, skipping...")
+    names = list(SCENARIOS) if "all" in args.scenarios else args.scenarios
+    base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_data")
+    for name in names:
+        sdir = os.path.join(base, name)
+        if not os.path.isdir(sdir):
+            print(f"Warning: {sdir} does not exist, skipping")
             continue
-        
-        # Determine event type from scenario name
-        if 'gunshot' in scenario:
-            event_type = 'gunshot'
-        elif 'explosion' in scenario:
-            event_type = 'explosion'
-        elif 'fireworks' in scenario:
-            event_type = 'fireworks'
-        else:
-            event_type = 'gunshot'  # default
-        
-        try:
-            generate_scenario_audio(scenario_dir, event_type)
-        except Exception as e:
-            print(f"Error generating {scenario}: {e}")
-    
-    print("Test data generation complete!")
+        generate_scenario(
+            sdir, fmt=fmt, seed=args.seed, noise_rms=args.noise_rms, clock_offsets_ms=args.clock_offsets_ms,
+            random_clock_ms=args.random_clock_ms, reflections=not args.no_reflections,
+            duration_s=args.duration_s, emission_s=args.emission_s, level=args.level,
+        )
+    print("Done.")
     return 0
 
 
-if __name__ == '__main__':
-    exit(main())
+if __name__ == "__main__":
+    sys.exit(main())

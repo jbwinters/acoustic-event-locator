@@ -1,208 +1,114 @@
 #!/usr/bin/env python3
 """
-Run the event location detector on all test scenarios and compare results with ground truth.
+Run locate_event.py on every generated scenario under test_data/ and score it against the
+ground truth in metadata.json (same local frame). Reports position error, whether the truth
+falls inside the 95% ellipse, timing residuals and, in prior mode, clock-offset errors.
+
+Usage
+  python generate_test_data.py            # once, writes the tracks and metadata
+  python run_test_scenarios.py            # synchronised-clock model (default)
+  python run_test_scenarios.py --clock_sigma_ms 2 --extra --min_snr 5
+Exit status is 1 if any scenario exceeds --max_error_m.
 """
 
-import subprocess
+import argparse
 import json
 import os
+import subprocess
 import sys
+
 import numpy as np
-from pathlib import Path
 
-def load_metadata(scenario_dir):
-    """Load ground truth metadata for a scenario."""
-    metadata_path = os.path.join(scenario_dir, 'metadata.json')
-    with open(metadata_path, 'r') as f:
-        return json.load(f)
+HERE = os.path.dirname(os.path.abspath(__file__))
+SCENARIOS = ("scenario1_gunshot", "scenario2_explosion", "scenario3_fireworks")
 
-def run_scenario(scenario_dir, verbose=True):
-    """Run the location detector on a scenario and return results."""
-    positions_file = os.path.join(scenario_dir, 'positions.json')
-    
-    if not os.path.exists(positions_file):
-        print(f"Error: {positions_file} not found")
-        return None
-    
-    if verbose:
-        print(f"\n=== Running {os.path.basename(scenario_dir)} ===")
-        print(f"Config: {positions_file}")
-    
-    # Run the location detector
-    try:
-        result = subprocess.run([
-            sys.executable, 'locate_event.py', 
-            '--videos_dir', scenario_dir,
-            '--positions', positions_file
-        ], capture_output=True, text=True, timeout=120)
-        
-        if result.returncode != 0:
-            print(f"Error running detector: {result.stderr}")
-            return None
-            
-        if verbose:
-            print("Detector output:")
-            print(result.stdout)
-            
-        return result.stdout
-        
-    except subprocess.TimeoutExpired:
-        print("Error: Detector timed out after 2 minutes")
-        return None
-    except Exception as e:
-        print(f"Error: {e}")
-        return None
 
-def parse_results(output_text):
-    """Parse the detector output to extract results."""
-    results = {}
-    
-    lines = output_text.split('\n')
-    for line in lines:
-        if 'Estimated location (local m):' in line:
-            # Extract position coordinates: "x=1.712, y=0.946"
-            try:
-                parts = line.split('x=')[1].split(',')
-                x = float(parts[0].strip())
-                y = float(parts[1].split('y=')[1].strip())
-                results['position'] = [x, y]
-            except:
-                pass
-        elif line.strip().startswith('[INFO] Mic') and 'clock offset' in line:
-            # Extract clock offsets from lines like "[INFO] Mic #1 clock offset: -0.002s"
-            if 'clock_offsets' not in results:
-                results['clock_offsets'] = []
-            try:
-                offset = float(line.split(':')[-1].strip().rstrip('s'))
-                results['clock_offsets'].append(offset)
-            except:
-                pass
-    
-    return results
+def run_locator(scenario_dir, out_dir, extra):
+    cmd = [
+        sys.executable, os.path.join(HERE, "locate_event.py"),
+        "--videos_dir", scenario_dir, "--positions", os.path.join(scenario_dir, "positions.json"),
+        "--out", out_dir,
+    ] + extra
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    return r.returncode, r.stdout + r.stderr
 
-def compare_results(estimated, ground_truth, scenario_name):
-    """Compare estimated results with ground truth."""
-    print(f"\n--- {scenario_name} Validation ---")
-    
-    # Position comparison
-    if 'position' in estimated:
-        est_pos = np.array(estimated['position'])
-        true_pos = np.array(ground_truth['source_position_m'])
-        
-        position_error = np.linalg.norm(est_pos - true_pos)
-        print(f"Position Error: {position_error:.1f} m")
-        print(f"  Estimated: ({est_pos[0]:.1f}, {est_pos[1]:.1f}) m")
-        print(f"  True:      ({true_pos[0]:.1f}, {true_pos[1]:.1f}) m")
-        
-        # Assess accuracy
-        if position_error < 5.0:
-            print("  ✓ Excellent accuracy (< 5m)")
-        elif position_error < 15.0:
-            print("  ✓ Good accuracy (< 15m)")
-        elif position_error < 50.0:
-            print("  ⚠ Moderate accuracy (< 50m)")
-        else:
-            print("  ✗ Poor accuracy (> 50m)")
-    else:
-        print("  ✗ No position estimate found")
-    
-    # Clock offset comparison  
-    if 'clock_offsets' in estimated and len(estimated['clock_offsets']) > 0:
-        est_offsets = np.array(estimated['clock_offsets'])
-        true_offsets = np.array(ground_truth['clock_offsets_s'])
-        
-        if len(est_offsets) == len(true_offsets):
-            # Compare relative offsets (subtract first mic as reference)
-            est_rel = est_offsets - est_offsets[0]
-            true_rel = true_offsets - true_offsets[0]
-            
-            offset_errors = np.abs(est_rel - true_rel)
-            max_offset_error = np.max(offset_errors)
-            mean_offset_error = np.mean(offset_errors)
-            
-            print(f"Clock Offset Errors: max={max_offset_error*1000:.1f}ms, mean={mean_offset_error*1000:.1f}ms")
-            
-            if max_offset_error < 0.005:  # 5ms
-                print("  ✓ Good clock synchronization (< 5ms)")
-            elif max_offset_error < 0.010:  # 10ms
-                print("  ✓ Acceptable synchronization (< 10ms)")
-            else:
-                print("  ⚠ Poor synchronization (> 10ms)")
-        else:
-            print(f"  ⚠ Clock offset count mismatch: {len(est_offsets)} vs {len(true_offsets)}")
-    else:
-        print("  ⚠ No clock offset estimates found")
 
-def main():
-    """Run all test scenarios and validate results."""
-    test_data_dir = 'test_data'
-    
-    if not os.path.exists(test_data_dir):
-        print("Error: test_data directory not found. Run generate_test_data.py first.")
-        return 1
-    
-    scenarios = [
-        'scenario1_gunshot',
-        'scenario2_explosion', 
-        'scenario3_fireworks'
-    ]
-    
-    print("Event Location Detector - Test Scenario Runner")
-    print("=" * 50)
-    
-    results_summary = []
-    
-    for scenario in scenarios:
-        scenario_dir = os.path.join(test_data_dir, scenario)
-        
-        if not os.path.exists(scenario_dir):
-            print(f"Warning: {scenario_dir} not found, skipping...")
+def score(results, truth):
+    est = np.array([results["event_location_local_m"]["x"], results["event_location_local_m"]["y"]])
+    tru = np.array(truth["source_position_m"][:2])
+    err = float(np.linalg.norm(est - tru))
+    a, b, ang = (results["confidence_ellipse_95"][k] for k in ("semi_major_m", "semi_minor_m", "angle_deg"))
+    d = tru - est
+    ca, sa = np.cos(np.deg2rad(ang)), np.sin(np.deg2rad(ang))
+    u, v = ca * d[0] + sa * d[1], -sa * d[0] + ca * d[1]
+    inside = (u / max(a, 1e-9)) ** 2 + (v / max(b, 1e-9)) ** 2 <= 1.0
+    offs_err = None
+    if results["clock_model"]["mode"] == "prior":
+        est_off = np.array([p["clock_offset_s"] or 0.0 for p in results["per_recording"] if p["used"]])
+        tru_off = np.array([o for o, p in zip(truth["clock_offsets_s"], results["per_recording"]) if p["used"]])
+        est_rel = est_off - est_off.mean()
+        tru_rel = tru_off - tru_off.mean()
+        offs_err = float(np.max(np.abs(est_rel - tru_rel)) * 1000)
+    return {
+        "error_m": err, "inside_95": bool(inside), "a_m": a, "b_m": b, "rmse_ms": results["fit"]["rmse_ms"],
+        "used": results["fit"]["recordings_used"], "total": results["fit"]["recordings_total"],
+        "ambiguous": results["fit"]["ambiguous"], "offset_err_ms": offs_err, "warnings": results["warnings"],
+    }
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description="Score locate_event.py on the synthetic scenarios.")
+    ap.add_argument("--scenarios", nargs="+", default=list(SCENARIOS))
+    ap.add_argument("--clock_sigma_ms", type=float, default=0.0)
+    ap.add_argument("--out", default=os.path.join(HERE, "out", "scenarios"))
+    ap.add_argument("--max_error_m", type=float, default=2.0, help="Fail if any scenario error exceeds this.")
+    ap.add_argument("--extra", nargs=argparse.REMAINDER, default=[], help="Extra arguments passed to locate_event.py")
+    ap.add_argument("--quiet", action="store_true")
+    args = ap.parse_args(argv)
+
+    rows = []
+    for name in args.scenarios:
+        sdir = os.path.join(HERE, "test_data", name)
+        meta_path = os.path.join(sdir, "metadata.json")
+        if not os.path.exists(meta_path):
+            print(f"{name}: no metadata.json (run generate_test_data.py first)")
             continue
-        
-        # Load ground truth
-        try:
-            metadata = load_metadata(scenario_dir)
-        except Exception as e:
-            print(f"Error loading metadata for {scenario}: {e}")
+        truth = json.load(open(meta_path))
+        missing = [f for f in truth.get("files", []) if not os.path.exists(os.path.join(sdir, f))]
+        if missing:
+            print(f"{name}: tracks missing {missing} (run generate_test_data.py first)")
             continue
-        
-        # Run detector
-        output = run_scenario(scenario_dir)
-        if output is None:
-            print(f"Failed to run {scenario}")
+        extra = ["--source_height_m", str(truth.get("source_height_m", 0.0))]
+        if args.clock_sigma_ms > 0:
+            extra += ["--clock_sigma_ms", str(args.clock_sigma_ms)]
+        extra += args.extra
+        out_dir = os.path.join(args.out, name)
+        code, log = run_locator(sdir, out_dir, extra)
+        if not args.quiet:
+            print(f"\n=== {name} ===")
+            print(log.strip())
+        if code != 0:
+            rows.append((name, None))
             continue
-        
-        # Parse and validate results
-        estimated = parse_results(output)
-        compare_results(estimated, metadata, scenario)
-        
-        # Store for summary
-        results_summary.append({
-            'scenario': scenario,
-            'estimated': estimated,
-            'ground_truth': metadata
-        })
-    
-    # Print summary
-    print("\n" + "=" * 50)
-    print("SUMMARY")
-    print("=" * 50)
-    
-    for result in results_summary:
-        scenario = result['scenario']
-        est = result['estimated']
-        truth = result['ground_truth']
-        
-        if 'position' in est:
-            est_pos = np.array(est['position'])
-            true_pos = np.array(truth['source_position_m'])
-            error = np.linalg.norm(est_pos - true_pos)
-            print(f"{scenario}: {error:.1f}m position error")
-        else:
-            print(f"{scenario}: FAILED")
-    
-    print("\nTest scenarios complete!")
-    return 0
+        results = json.load(open(os.path.join(out_dir, "results.json")))
+        rows.append((name, score(results, truth)))
 
-if __name__ == '__main__':
-    exit(main())
+    print("\n" + "=" * 78)
+    print(f"{'scenario':22s} {'error':>8s} {'95% ellipse':>14s} {'in':>3s} {'rmse':>8s} {'used':>5s} {'offset err':>10s}")
+    failed = False
+    for name, s in rows:
+        if s is None:
+            print(f"{name:22s} FAILED")
+            failed = True
+            continue
+        flag = "" if s["error_m"] <= args.max_error_m else "  <-- exceeds limit"
+        failed |= s["error_m"] > args.max_error_m
+        off = f"{s['offset_err_ms']:.2f} ms" if s["offset_err_ms"] is not None else "-"
+        amb = " (ambiguous)" if s["ambiguous"] else ""
+        print(f"{name:22s} {s['error_m']:6.2f} m {s['a_m']:6.2f}x{s['b_m']:5.2f} m {'y' if s['inside_95'] else 'n':>3s} {s['rmse_ms']:5.3f} ms {s['used']:>2d}/{s['total']:<2d} {off:>10s}{amb}{flag}")
+    print("=" * 78)
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

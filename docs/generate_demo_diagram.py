@@ -192,7 +192,7 @@ def build_svg(positions: dict, metadata: dict) -> str:
         text(82, 164, positions["description"], 18, "#CBD5E1", 500),
         text(82, 196, "Generated from the included synthetic fireworks scenario data", 16, "#93C5FD", 500),
         text(816, 98, "Scenario Snapshot", 16, "#64748B", 700),
-        text(816, 132, event_info["estimated_location"]["description"], 28, "#0F172A", 700),
+        text(816, 132, (event_info.get("true_location") or event_info["estimated_location"])["description"], 28, "#0F172A", 700),
         text(816, 164, f'Event type: {event_info["type"]}  |  UTC: {event_info["time_utc"]}', 15, "#475569", 500),
     ]
 

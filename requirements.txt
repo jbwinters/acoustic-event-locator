@@ -1,0 +1,5 @@
+# Runtime dependencies for locate_event.py
+numpy>=1.22
+scipy>=1.8
+soundfile>=0.10
+matplotlib>=3.5
