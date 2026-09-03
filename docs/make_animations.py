@@ -12,11 +12,11 @@ locate_event.locate_from_signals / solve_tdoa.
 """
 
 import argparse
-import json
 import os
 import shutil
 import sys
 import tempfile
+import textwrap
 
 import numpy as np
 import matplotlib
@@ -133,6 +133,7 @@ def render_explainer(out_path, fps=15, dpi=80):
     cursor, pick_lines = draw_strips(axw, xf, t_lo, t_hi, [f"mic {i+1}" for i in range(4)], picks=list(arr))
     axw.set_title("band-passed audio of each recording", fontsize=9)
 
+    fig.tight_layout()
     hyper_artists, cost_im, path_line, path_pts, ell, est_pt, starts_pts = [], [None], [None], [None], [None], [None], [None]
     pairs = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
     n1, n2, n3, hold = 45, 36, 40, 18
@@ -164,6 +165,7 @@ def render_explainer(out_path, fps=15, dpi=80):
                 for cs in hyper_artists:
                     cs.remove()
                 cost_im[0] = ax.pcolormesh(GX, GY, logcost, shading="auto", cmap="viridis", alpha=0.75, zorder=0)
+                wave.set_visible(False)
                 mics.set_zorder(6)
                 title.set_text("3. Grid search over the misfit surface, then Levenberg-Marquardt refines to the minimum")
                 starts_pts[0] = ax.scatter([path[0, 0]], [path[0, 1]], marker="s", s=50, c="white", edgecolors="k", zorder=7, label="best grid start")
@@ -178,7 +180,7 @@ def render_explainer(out_path, fps=15, dpi=80):
                 est_pt[0] = ax.scatter([sol.s_xy[0]], [sol.s_xy[1]], marker="*", s=200, c=C_EST, edgecolors="k", zorder=10, label="estimate")
                 err = np.linalg.norm(sol.s_xy - src[:2])
                 a, b, _ = le.ellipse_from_cov2(sol.cov_xy)
-                title.set_text(f"4. Estimate and 95% ellipse ({2*a:.2f} x {2*b:.2f} m); error to truth {err*100:.1f} cm")
+                title.set_text(f"4. Estimate with its 95% ellipse ({2*a:.2f} x {2*b:.2f} m)\nerror to the true source: {err*100:.1f} cm")
                 ax.legend(loc="upper right", fontsize=8)
             return
 
@@ -228,21 +230,22 @@ def render_scenario(name, out_path, fps=15, dpi=80, seed=0):
     three_d = sol.solve_z or bool((S["hsig"] > 0).any())
     XYZ_true = np.array(truth["microphone_positions_m"])
 
-    fig = plt.figure(figsize=(12, 6.0 if three_d else 5.4))
+    fig = plt.figure(figsize=(12, 6.4 if three_d else 5.6))
     if three_d:
-        gs = fig.add_gridspec(2, 2, width_ratios=[1.05, 1], height_ratios=[1.15, 1])
+        gs = fig.add_gridspec(2, 2, width_ratios=[1.05, 1], height_ratios=[1.15, 1], hspace=0.5, wspace=0.22)
         ax = fig.add_subplot(gs[:, 0])
         axw = fig.add_subplot(gs[0, 1])
         axz = fig.add_subplot(gs[1, 1])
     else:
-        gs = fig.add_gridspec(1, 2, width_ratios=[1.05, 1])
+        gs = fig.add_gridspec(1, 2, width_ratios=[1.05, 1], wspace=0.22)
         ax = fig.add_subplot(gs[0, 0])
         axw = fig.add_subplot(gs[0, 1])
         axz = None
-    fig.suptitle(f"{name}: {S['description']}", fontsize=10)
+    fig.suptitle(textwrap.fill(f"{name}: {S['description']}", 120), fontsize=9.5)
+    fig.subplots_adjust(top=0.86, bottom=0.1, left=0.07, right=0.98)
 
     extra = [src] + [np.array([a["x"], a["y"]]) for a in sol.alternatives]
-    set_map_limits(ax, XYZ, extra, pad=10)
+    set_map_limits(ax, XYZ, extra, pad=14)
     ax.set_xlabel("x east (m)")
     ax.set_ylabel("y north (m)")
     ax.grid(True, alpha=0.25)
@@ -296,6 +299,7 @@ def render_scenario(name, out_path, fps=15, dpi=80, seed=0):
             return
         if not shown[0]:
             shown[0] = True
+            wave.set_visible(False)
             ax.add_patch(ellipse_patch(sol, color=C_EST, lw=2.0, zorder=9))
             ax.scatter([sol.s_xy[0]], [sol.s_xy[1]], marker="*", s=200, c=C_EST, edgecolors="k", zorder=10, label="estimate + 95% ellipse")
             if sol.alternatives:
@@ -304,13 +308,14 @@ def render_scenario(name, out_path, fps=15, dpi=80, seed=0):
             err = np.linalg.norm(sol.s_xy - src[:2])
             near = min([err] + [np.linalg.norm(np.array([a["x"], a["y"]]) - src[:2]) for a in sol.alternatives])
             a_, b_, _ = le.ellipse_from_cov2(sol.cov_xy)
-            msg = f"estimate: error {err:.2f} m, 95% ellipse {2*a_:.2f} x {2*b_:.2f} m"
+            msg = f"estimate: {err:.2f} m from the true source, 95% ellipse {2*a_:.2f} x {2*b_:.2f} m"
             if sol.ambiguous:
-                msg += f"; ambiguous geometry, nearest reported solution {near:.2f} m from truth"
+                msg += f"\ncollinear cameras: mirror solution also reported, nearest one {near:.2f} m from truth"
             if sol.solve_z:
-                msg += f"\nheight {sol.s_xyz[2]:.1f} m (true {src[2]:.1f}), std {sol.z_std:.2f} m"
+                msg += f"\nheight solved: {sol.s_xyz[2]:.1f} m (true {src[2]:.1f} m), std {sol.z_std:.2f} m"
             title.set_text(msg)
-            ax.legend(loc="upper right", fontsize=8)
+            title.set_fontsize(8.5)
+            ax.legend(loc="best", fontsize=8)
             if axz is not None:
                 axz.errorbar([sol.s_xy[0]], [sol.s_xyz[2]], yerr=[[2 * sol.z_std], [2 * sol.z_std]], fmt="*", ms=14,
                              capsize=4, color=C_EST, zorder=6, label="estimated height (95%)")

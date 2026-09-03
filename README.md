@@ -12,6 +12,18 @@ the event.
 The diagram is generated from the included synthetic fireworks scenario with
 `python docs/generate_demo_diagram.py`.
 
+### How it works, animated
+
+![How TDOA localisation works](docs/anim/how_it_works_2d.gif)
+
+Four acts on a 20 m square of four microphones: the wavefront reaches each microphone at a
+different time (right: the band-passed recordings with the refined arrival picks); each pair's
+time difference confines the source to a hyperbola; the misfit surface is searched on a grid
+and refined by Levenberg-Marquardt; the result is reported with its 95% ellipse. Every frame
+is computed by the same generator and locator code the tests run
+(`python docs/make_animations.py`). Per-scenario animations are under
+[Scenario walkthroughs](#scenario-walkthroughs).
+
 ## What it does, and what it cannot do
 
 - With **time-synchronised recordings** and a non-collinear array the estimate is accurate to
@@ -195,6 +207,19 @@ to what your picks actually achieve (0.5 to 2 ms is typical) so the ellipse stay
 
 With clock offsets drawn from N(0, 2 ms) and `--clock_sigma_ms 2`: gunshot 1.40 m, fireworks
 0.21 m, both inside their ellipses.
+
+### Scenario walkthroughs
+
+Each animation runs the real pipeline on that scenario's synthetic recordings: the wavefront
+from the true source, the picks appearing in each recording as it is reached, then the estimate
+with its 95% ellipse, any alternative solution, and (3D scenarios) the elevation view with the
+height prior and the solved height.
+
+| Gunshot, four cameras on an intersection | Explosion, five cameras in a straight line |
+|---|---|
+| ![scenario 1](docs/anim/scenario1_gunshot.gif) | ![scenario 2](docs/anim/scenario2_explosion.gif) |
+| **Fireworks 25 m up, height solved from a 20 ± 30 m prior** | **Shot from a 9 m window, phones with 1.5 ± 0.5 m heights plus surveyed cameras** |
+| ![scenario 3](docs/anim/scenario3_fireworks.gif) | ![scenario 4](docs/anim/scenario4_window_shot.gif) |
 
 **Signal-to-noise** (gunshot inside a 20 m square, 4 recordings, 12 trials per row):
 
