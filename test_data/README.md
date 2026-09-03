@@ -7,14 +7,14 @@ with the true location) and, after generation, one audio track per recording and
 ```bash
 python generate_test_data.py                         # all scenarios, WAV (MP4 if ffmpeg is on PATH)
 python generate_test_data.py --scenarios scenario1_gunshot --format wav --seed 7
-python generate_test_data.py --random_clock_ms 2     # unsynchronised clocks, N(0, 2 ms)
+python generate_test_data.py --random_clock_ms 2     # unsynchronized clocks, N(0, 2 ms)
 python generate_test_data.py --noise_rms 0.01        # 10 dB more background noise
 ```
 
 and score the locator against them with
 
 ```bash
-python run_test_scenarios.py                         # synchronised clocks
+python run_test_scenarios.py                         # synchronized clocks
 python run_test_scenarios.py --clock_sigma_ms 2      # after generating with --random_clock_ms 2
 python run_test_scenarios.py --z prior               # solve the event height with each scenario's prior
 ```
@@ -25,7 +25,7 @@ scorer passes with `--z prior`.
 
 | Scenario | Event | Array | Notes |
 |---|---|---|---|
-| `scenario1_gunshot` | gunshot, 1.2 m high | 4 cameras on the corners of a 17 x 22 m intersection | good geometry, source off-centre |
+| `scenario1_gunshot` | gunshot, 1.2 m high | 4 cameras on the corners of a 17 x 22 m intersection | good geometry, source off-center |
 | `scenario2_explosion` | explosion at ground level | 5 cameras in an 88 m straight line | collinear: the mirror solution is reported as an alternative |
 | `scenario3_fireworks` | aerial burst 25 m up | 6 cameras in an L (50 x 44 m) | event height solved from a 20 ± 30 m prior |
 | `scenario4_window_shot` | gunshot from a window 9 m up | 4 phones (height 1.5 ± 0.5 m, true 1.2 to 1.8 m), doorbell 1.4 m, mast 6 m, rooftop 22 m | uncertain recording heights (`height_sigma_m`, `true_height_m`) plus a 5 ± 10 m event-height prior |
@@ -40,7 +40,7 @@ scorer passes with `--z prior`.
 - event waveforms: gunshot (broadband decaying burst plus low-frequency push), explosion
   (shock front plus 40 to 1500 Hz rumble), fireworks (report followed by a second of crackles)
 
-Not modelled: wind, temperature gradients, microphone directivity, clipping and automatic gain
+Not modeled: wind, temperature gradients, microphone directivity, clipping and automatic gain
 control. Waveforms are identical at every recording apart from noise and echoes.
 
 ## metadata.json

@@ -21,7 +21,7 @@ Inputs
       }
 
 Outputs (written to --out)
-  results.json   location (local metres and WGS84), 95% ellipse, per-recording arrivals,
+  results.json   location (local meters and WGS84), 95% ellipse, per-recording arrivals,
                  clock offsets, residuals, fit diagnostics, alternative solutions
   sync.csv       per-recording arrival time and the seek offset that aligns it on the event
   layout.png     geometry, estimate, 95% ellipse
@@ -34,15 +34,15 @@ Model
     t0       emission time on the common clock
     delta_i  clock offset of recording i
 
-Clock synchronisation
+Clock synchronization
   One event cannot determine per-device clock offsets: for every candidate position there
   is a set of offsets that fits the arrivals exactly. The position is therefore only as
-  good as the clock synchronisation of the recordings. Two modes are offered:
-    --clock_sigma_ms 0   (default) devices are assumed synchronised; offsets fixed at 0
+  good as the clock synchronization of the recordings. Two modes are offered:
+    --clock_sigma_ms 0   (default) devices are assumed synchronized; offsets fixed at 0
     --clock_sigma_ms S   offsets are estimated under a Gaussian prior N(0, S^2); the
                          result is a MAP estimate and the position uncertainty grows with S
   Recordings whose clocks differ by more than the array's maximum propagation delay cannot
-  be localised from a single event. sync.csv still gives the offset that aligns each
+  be localized from a single event. sync.csv still gives the offset that aligns each
   recording on the event.
 
 Pipeline
@@ -51,9 +51,9 @@ Pipeline
      noise floor; choose one candidate per recording so that the set is physically
      consistent with the geometry (event association).
   3. Fine first-arrival pick with an AIC change-point picker around each candidate.
-  4. Pairwise band-limited generalised cross-correlation between recordings for
+  4. Pairwise band-limited generalized cross-correlation between recordings for
      sub-sample relative timing, fused by weighted least squares.
-  5. Vectorised grid search for starting points, Levenberg-Marquardt refinement with
+  5. Vectorized grid search for starting points, Levenberg-Marquardt refinement with
      Huber reweighting, multi-start so that ambiguous geometries are reported.
   6. Covariance from the full parameter Fisher matrix (position, t0, offsets), inflated by
      the reduced chi-square when the residuals exceed the assumed timing noise.
@@ -85,7 +85,7 @@ AUDIO_EXTS = (".wav", ".flac", ".ogg", ".aiff", ".aif")
 
 
 class LocatorError(Exception):
-    """User-facing error: bad inputs or data that cannot be localised."""
+    """User-facing error: bad inputs or data that cannot be localized."""
 
 
 # ------------------------------ Utilities ------------------------------
@@ -118,14 +118,14 @@ def _json_default(o):
         return o.tolist()
     if isinstance(o, (np.bool_,)):
         return bool(o)
-    raise TypeError(f"not JSON serialisable: {type(o)}")
+    raise TypeError(f"not JSON serializable: {type(o)}")
 
 
 # ------------------------------ Geo conversion (local tangent plane) ------------------------------
 
 
 def meters_per_degree(lat_deg: float) -> Tuple[float, float]:
-    """WGS-84 metres per degree of latitude and longitude at the given latitude."""
+    """WGS-84 meters per degree of latitude and longitude at the given latitude."""
     phi = math.radians(lat_deg)
     m_lat = 111132.954 - 559.822 * math.cos(2 * phi) + 1.175 * math.cos(4 * phi)
     m_lon = (
@@ -137,8 +137,8 @@ def meters_per_degree(lat_deg: float) -> Tuple[float, float]:
 
 
 def latlon_to_local_xy(lat, lon, lat0, lon0):
-    """Equirectangular projection about (lat0, lon0); x east, y north, metres.
-    Accurate to ~1e-4 relative over a few kilometres."""
+    """Equirectangular projection about (lat0, lon0); x east, y north, meters.
+    Accurate to ~1e-4 relative over a few kilometers."""
     m_lat, m_lon = meters_per_degree(lat0)
     return (lon - lon0) * m_lon, (lat - lat0) * m_lat
 
@@ -442,10 +442,10 @@ def gcc(
     band: Optional[Tuple[float, float]] = None,
     phat_eps: float = 1e-2,
 ):
-    """Generalised cross-correlation of sig against ref.
+    """Generalized cross-correlation of sig against ref.
 
     Returns (tau_s, quality, lags_s, cc). tau > 0 means sig is delayed relative to ref.
-    weighting: 'cc' (plain), 'phat' (regularised phase transform), 'scot'.
+    weighting: 'cc' (plain), 'phat' (regularized phase transform), 'scot'.
     band: (low, high) Hz; bins outside are zeroed so empty spectrum regions do not add noise.
     quality: peak height over the largest secondary peak more than 1 ms away (>= 1)."""
     sig = np.asarray(sig, dtype=np.float64)
@@ -652,7 +652,7 @@ def profile_t0(s, t, XYZ, c, w, source_z=0.0):
 def grid_search_init(
     t, XYZ, c, w, source_z, bounds, res, n_best=6, min_sep=None, max_points=300_000
 ):
-    """Vectorised grid search of the synchronised-clock cost with t0 profiled out, at a fixed
+    """Vectorized grid search of the synchronized-clock cost with t0 profiled out, at a fixed
     source height. Returns up to n_best well separated low-cost grid points as
     [((x, y), cost), ...]."""
     xmin, xmax, ymin, ymax = bounds
@@ -954,7 +954,7 @@ def solve_tdoa(
     """Robust weighted TDOA multilateration.
 
     t               arrival times (s) on each recording's own clock
-    XYZ             (M, 3) recording positions in metres (z = height, or its prior mean)
+    XYZ             (M, 3) recording positions in meters (z = height, or its prior mean)
     sigma_t         per-recording timing standard deviation (s); default 0.5 ms
     source_z        event height (m): fixed when source_z_sigma == 0, else the prior mean
     source_z_sigma  prior std of the event height (m); > 0 solves z as a parameter
@@ -962,7 +962,7 @@ def solve_tdoa(
                     below a horizontal camera plane)
     height_sigma    per-recording prior std of the height (m); 0 = known. Recordings with
                     height_sigma > 0 get their height estimated jointly with a prior at XYZ[i, 2]
-    clock_sigma     prior std of per-recording clock offsets (s); 0 = synchronised (offsets fixed)
+    clock_sigma     prior std of per-recording clock offsets (s); 0 = synchronized (offsets fixed)
     huber_k         residual magnitude (s) beyond which observations are down-weighted
     reject_k        residual magnitude (s) beyond which an observation is dropped and the fit
                     repeated, as long as at least 4 recordings remain (default 3 * huber_k;
@@ -971,7 +971,7 @@ def solve_tdoa(
     search_radius   grid search extends this far beyond the array bounding box (default
                     max(200 m, 3 x array extent)); grid_res defaults to ~400 steps across it
     trace           optional list receiving the parameter vector after each accepted
-                    Levenberg-Marquardt step of the best start (for visualisation)
+                    Levenberg-Marquardt step of the best start (for visualization)
     Alternative minima outside the 95% region of the best solution are reported; the solution
     is flagged ambiguous when one of them fits within delta_cost <= 3.
     """
@@ -1345,7 +1345,7 @@ def plot_layout(XY, s_xy, cov, out_png, labels=None, alternatives=None, unused=N
         ax = axes[0]
     ax.scatter(XY[used_mask, 0], XY[used_mask, 1], marker="^", s=60, label="Recordings")
     if (~used_mask).any():
-        ax.scatter(XY[~used_mask, 0], XY[~used_mask, 1], marker="x", s=60, c="grey", label="Not used")
+        ax.scatter(XY[~used_mask, 0], XY[~used_mask, 1], marker="x", s=60, c="gray", label="Not used")
     if labels:
         for (x, y), lb in zip(XY, labels):
             ax.annotate(lb, (x, y), textcoords="offset points", xytext=(4, 4), fontsize=8)
@@ -1372,7 +1372,7 @@ def plot_layout(XY, s_xy, cov, out_png, labels=None, alternatives=None, unused=N
         ax2.errorbar(XY[used_mask, 0], mic_z[used_mask], yerr=2 * mic_z_std[used_mask], fmt="^", ms=7,
                      capsize=3, label="Recordings (height, 95%)")
         if (~used_mask).any():
-            ax2.scatter(XY[~used_mask, 0], mic_z[~used_mask], marker="x", c="grey", s=60)
+            ax2.scatter(XY[~used_mask, 0], mic_z[~used_mask], marker="x", c="gray", s=60)
         zp = elevation.get("z_prior")
         if zp is not None and zp[1] > 0:
             ax2.axhspan(zp[0] - 2 * zp[1], zp[0] + 2 * zp[1], color="tab:orange", alpha=0.12, label="Height prior (95%)")
@@ -1466,7 +1466,7 @@ def build_results(res: dict, files, XYZ, lat0, lon0, c, p: PipelineParams, fs: i
         },
         "speed_of_sound_mps": c,
         "emission_time_s": sol.t0,
-        "clock_model": {"mode": "prior" if sol.estimate_offsets else "synchronised", "clock_sigma_ms": p.clock_sigma_s * 1000},
+        "clock_model": {"mode": "prior" if sol.estimate_offsets else "synchronized", "clock_sigma_ms": p.clock_sigma_s * 1000},
         "fit": {
             "recordings_used": len(res["used"]),
             "recordings_total": len(files),
@@ -1512,14 +1512,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--min_snr", type=float, default=4.0, help="Onset must exceed this multiple of the noise floor (moving RMS).")
     ap.add_argument("--merge_gap_s", type=float, default=0.5, help="Onsets closer than this to a previous burst are treated as its coda.")
     ap.add_argument("--slack_ms", type=float, default=5.0, help="Extra tolerance on the physical arrival-time gate.")
-    ap.add_argument("--clock_sigma_ms", type=float, default=0.0, help="Prior std of per-recording clock offsets; 0 = synchronised clocks.")
+    ap.add_argument("--clock_sigma_ms", type=float, default=0.0, help="Prior std of per-recording clock offsets; 0 = synchronized clocks.")
     ap.add_argument("--source_height_m", type=float, default=0.0, help="Event height (m) in the same datum as height_m; fixed unless --source_height_sigma_m > 0, then the prior mean.")
     ap.add_argument("--source_height_sigma_m", type=float, default=0.0, help="Prior std of the event height (m); > 0 solves the height (3D).")
     ap.add_argument("--source_height_bounds", type=float, nargs=2, default=(0.0, 5000.0), metavar=("MIN", "MAX"), help="Allowed event height range when solving it.")
     ap.add_argument("--timing_sigma_ms", type=float, default=0.5, help="Assumed arrival-time noise for the strongest recording.")
     ap.add_argument("--huber_k_ms", type=float, default=2.0, help="Residuals beyond this are down-weighted (robustness).")
     ap.add_argument("--search_radius_m", type=float, default=None, help="Search this far beyond the array (default max(200, 3x extent)).")
-    ap.add_argument("--grid_res_m", type=float, default=None, help="Grid resolution for initialisation (default auto).")
+    ap.add_argument("--grid_res_m", type=float, default=None, help="Grid resolution for initialization (default auto).")
     ap.add_argument("--gcc_weight", choices=("phat", "cc", "scot"), default="phat", help="Cross-correlation weighting for refinement.")
     ap.add_argument("--no_refine", action="store_true", help="Skip cross-correlation refinement (AIC picks only).")
     ap.add_argument("--verbose", action="store_true", help="Debug logging.")
@@ -1555,13 +1555,13 @@ def run(args) -> dict:
 
     mics, (lat0, lon0), c, _ = load_positions(args.positions, args.videos_dir)
     if len(mics) < 3:
-        raise LocatorError("need at least 3 recordings to localise in 2D (4 or more recommended)")
+        raise LocatorError("need at least 3 recordings to localize in 2D (4 or more recommended)")
     XYZ = mic_local_xyz(mics, lat0, lon0)
     hsig = mic_height_sigma(mics)
     files = [m.file for m in mics]
     zmodel = (f"solved, prior {p.source_z:g} +- {p.source_z_sigma:g} m" if p.source_z_sigma > 0 else f"fixed at {p.source_z:g} m")
     log(f"{len(mics)} recordings, speed of sound {c:.2f} m/s, clock model "
-        f"{'prior sigma=%.1f ms' % args.clock_sigma_ms if p.clock_sigma_s > 0 else 'synchronised'}, event height {zmodel}"
+        f"{'prior sigma=%.1f ms' % args.clock_sigma_ms if p.clock_sigma_s > 0 else 'synchronized'}, event height {zmodel}"
         + (f", {int((hsig > 0).sum())} recording height(s) uncertain" if (hsig > 0).any() else ""))
 
     signals = []

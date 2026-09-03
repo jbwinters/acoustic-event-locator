@@ -7,7 +7,7 @@ Render the README animations from real pipeline runs.
 
 Every frame is computed from the same synthetic generator and locator code the tests use:
 the wavefront is drawn from the true source, the waveform strips are the band-passed audio the
-locator analysed, the picks, estimate, ellipse and alternative solutions come out of
+locator analyzed, the picks, estimate, ellipse and alternative solutions come out of
 locate_event.locate_from_signals / solve_tdoa.
 """
 
@@ -55,7 +55,7 @@ def set_map_limits(ax, XY, extra_pts=(), pad=8.0):
 
 
 def draw_strips(ax, xf_list, t_lo, t_hi, labels, picks=None):
-    """Normalised, vertically stacked band-passed waveforms in [t_lo, t_hi]. Returns
+    """Normalized, vertically stacked band-passed waveforms in [t_lo, t_hi]. Returns
     (cursor_line, pick_lines) where pick_lines start invisible."""
     n = len(xf_list)
     a, b = int(t_lo * FS), int(t_hi * FS)

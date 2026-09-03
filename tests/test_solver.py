@@ -146,7 +146,7 @@ class TestClockPrior:
         sol = le.solve_tdoa(t, XYZ, C, sigma_t=np.full(6, 0.2e-3))
         assert sol.scale > 4.0 and le.mahalanobis_xy(sol, src) < 3.5
 
-    def test_prior_zero_means_synchronised(self):
+    def test_prior_zero_means_synchronized(self):
         XYZ, src = square_xyz(20.0), np.array([4.0, 7.0])
         sol = le.solve_tdoa(arrivals(src, XYZ), XYZ, C, clock_sigma=0.0)
         assert not sol.estimate_offsets and sol.cov.shape == (3, 3)

@@ -22,7 +22,7 @@ def _run(tracks, XYZ, c, src, **params):
 class TestInMemoryScenarios:
     @pytest.mark.parametrize("kind", gen.EVENT_KINDS)
     @pytest.mark.parametrize("seed", [0, 1])
-    def test_square_array_centimetre_accuracy(self, kind, seed):
+    def test_square_array_centimeter_accuracy(self, kind, seed):
         XYZ, src = square_xyz(20.0), np.array([4.0, 7.0, 0.0])
         tracks, truth = gen.synthesize_scenario(XYZ, src, C, kind, noise_rms=0.003, rng=np.random.default_rng(seed))
         res = _run(tracks, XYZ, C, src)
@@ -150,7 +150,7 @@ class TestCommandLine:
         assert np.linalg.norm(est - src[:2]) < 0.05
         lat, lon = r["event_location_wgs84"]["lat"], r["event_location_wgs84"]["lon"]
         assert abs(lat - SRC_LL[0]) < 1e-6 and abs(lon - SRC_LL[1]) < 1e-6
-        assert r["fit"]["recordings_used"] == 4 and r["clock_model"]["mode"] == "synchronised"
+        assert r["fit"]["recordings_used"] == 4 and r["clock_model"]["mode"] == "synchronized"
         assert r["confidence_ellipse_95"]["semi_major_m"] < 1.0
         for p, t_true in zip(r["per_recording"], truth["arrival_times_s"]):
             assert p["used"] and abs(p["arrival_time_s"] - t_true) < 0.002
@@ -237,7 +237,7 @@ class TestCommandLine:
 
 
 class TestGeneratorScenarios:
-    """The checked-in scenario definitions, generated on the fly, must localise accurately."""
+    """The checked-in scenario definitions, generated on the fly, must localize accurately."""
 
     @pytest.mark.parametrize("name", gen.SCENARIOS)
     def test_scenario(self, name, tmp_path):
@@ -255,7 +255,7 @@ class TestGeneratorScenarios:
         tru = np.array(truth["source_position_m"])
         cands = [est] + [np.array([a["x"], a["y"]]) for a in r["fit"]["alternatives"]]
         err = min(np.linalg.norm(cnd - tru) for cnd in cands)
-        # recordings whose height is only known to +-0.5 m cost a few centimetres
+        # recordings whose height is only known to +-0.5 m cost a few centimeters
         assert err < (0.15 if any(s > 0 for s in truth["microphone_height_sigma_m"]) else 0.05)
         assert r["fit"]["recordings_used"] == len(truth["files"])
         if "linear" in name or name.startswith("scenario2"):

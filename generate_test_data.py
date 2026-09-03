@@ -13,7 +13,7 @@ Physics included
   * independent background noise per recording
   * per-recording clock offsets (each recording runs on its own clock)
   * optional early reflections (echoes) with random delays and gains per recording
-Not modelled: wind, temperature gradients, microphone directivity, clipping/AGC.
+Not modeled: wind, temperature gradients, microphone directivity, clipping/AGC.
 
 Output format: WAV by default (no external tools needed). --format mp4 wraps each track in an
 MP4 with a black video track and needs ffmpeg. locate_event.py reads either.
@@ -37,7 +37,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import locate_event as le  # noqa: E402
 
 EVENT_KINDS = ("gunshot", "explosion", "fireworks")
-DEFAULT_CLOCK_OFFSETS_MS = [0.0] * 8  # synchronised by default; see --clock_offsets_ms / --random_clock_ms
+DEFAULT_CLOCK_OFFSETS_MS = [0.0] * 8  # synchronized by default; see --clock_offsets_ms / --random_clock_ms
 SCENARIOS = ("scenario1_gunshot", "scenario2_explosion", "scenario3_fireworks", "scenario4_window_shot")
 
 
@@ -45,7 +45,7 @@ SCENARIOS = ("scenario1_gunshot", "scenario2_explosion", "scenario3_fireworks", 
 
 
 def event_waveform(kind: str, fs: int, rng: np.random.Generator) -> np.ndarray:
-    """Event pressure waveform with its onset at index 0, normalised to peak 1."""
+    """Event pressure waveform with its onset at index 0, normalized to peak 1."""
     if kind == "gunshot":
         n = int(0.06 * fs)
         t = np.arange(n) / fs

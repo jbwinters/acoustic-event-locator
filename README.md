@@ -3,7 +3,7 @@
 Locate a single impulsive sound (gunshot, explosion, firework burst) from audio recorded by
 several spatially separated devices, using time-difference-of-arrival (TDOA) multilateration.
 Input is a directory of recordings (video files via ffmpeg, or WAV/FLAC directly) and a JSON file
-with each device's GPS position. Output is the event position in local metres and WGS84, a 95%
+with each device's GPS position. Output is the event position in local meters and WGS84, a 95%
 confidence ellipse, per-recording arrival times, and the offsets that align every recording on
 the event.
 
@@ -14,7 +14,7 @@ The diagram is generated from the included synthetic fireworks scenario with
 
 ### How it works, animated
 
-![How TDOA localisation works](docs/anim/how_it_works_2d.gif)
+![How TDOA localization works](docs/anim/how_it_works_2d.gif)
 
 Four acts on a 20 m square of four microphones: the wavefront reaches each microphone at a
 different time (right: the band-passed recordings with the refined arrival picks); each pair's
@@ -26,15 +26,15 @@ is computed by the same generator and locator code the tests run
 
 ## What it does, and what it cannot do
 
-- With **time-synchronised recordings** and a non-collinear array the estimate is accurate to
-  centimetres on synthetic data (see [Accuracy](#accuracy)) and the reported ellipse is calibrated.
+- With **time-synchronized recordings** and a non-collinear array the estimate is accurate to
+  centimeters on synthetic data (see [Accuracy](#accuracy)) and the reported ellipse is calibrated.
 - With recordings whose clocks disagree by a known amount (say a few milliseconds of NTP jitter)
   you can supply that as a prior (`--clock_sigma_ms`); the position error and the ellipse grow
   accordingly.
-- **One event cannot synchronise unsynchronised recordings.** For any candidate position there
+- **One event cannot synchronize unsynchronized recordings.** For any candidate position there
   is a set of per-device clock offsets that fits the arrivals exactly, so the offsets and the
   position cannot both be determined from a single event. Recordings started by hand on
-  different phones (offsets of seconds) cannot be localised with this tool; it says so instead
+  different phones (offsets of seconds) cannot be localized with this tool; it says so instead
   of guessing. `sync.csv` still gives the seek offset that aligns each recording on the event.
   Joint estimation from several events is the way to lift this and is listed under
   [Limitations](#limitations-and-roadmap).
@@ -113,7 +113,7 @@ listed in `positions.json` is missing but a `.wav` with the same stem exists, th
   estimate and per-recording height error bars.
 - `results.json` also carries `height_model`: the source height prior, estimate and std, and the
   same for every recording whose height was uncertain.
-- `wav/`: the mono audio actually analysed.
+- `wav/`: the mono audio actually analyzed.
 
 Read the `warnings` list. The locator prefers a clear failure or a flagged result to a silent
 wrong answer; the flags that matter are `ambiguous`, `at_search_boundary`, `degenerate`, a
@@ -130,13 +130,13 @@ relaxed detection threshold, and an uncertainty scale well above 1.
    it. White noise alone peaks at about 2x the floor, so the default 4x has a 2x margin.
 3. **Association**: one candidate per recording is chosen so that all chosen arrivals are
    mutually consistent with the geometry (|t_i - t_j| <= d_ij / c + slack). A louder unrelated
-   sound in one recording is rejected in favour of the consistent onset; a recording with no
+   sound in one recording is rejected in favor of the consistent onset; a recording with no
    consistent onset is excluded and reported.
 4. **Fine pick**: an AIC change-point picker in a window around each candidate.
-5. **Refinement**: pairwise band-limited, regularised GCC-PHAT between recordings with parabolic
+5. **Refinement**: pairwise band-limited, regularized GCC-PHAT between recordings with parabolic
    sub-sample interpolation, fused by weighted least squares into consistent arrival times.
    Pairs without a clear correlation peak are ignored and reported.
-6. **Solve**: `t_i = t0 + |s - x_i| / c + delta_i`. Vectorised grid search over a wide area,
+6. **Solve**: `t_i = t0 + |s - x_i| / c + delta_i`. Vectorized grid search over a wide area,
    multi-start Levenberg-Marquardt with Huber reweighting, bounded to the search area. A bad
    arrival is rejected when at least 4 recordings remain, either from its residual or from a
    leave-one-out check that catches an arrival the fit would otherwise absorb by moving the
@@ -164,19 +164,19 @@ What to expect:
 - A source at the same height as the cameras is not: every arrival responds to height the
   same way, which is absorbed by the emission time. The std reported for z is large and the
   x, y solution is unaffected.
-- Cameras all in one horizontal plane cannot tell a source h metres above the plane from one h
-  metres below it. The default height bounds remove the underground image; if both are
+- Cameras all in one horizontal plane cannot tell a source h meters above the plane from one h
+  meters below it. The default height bounds remove the underground image; if both are
   physically possible the second appears under `alternatives`.
 - An uncertain camera height only affects that camera's arrival, by
-  `|z_event - z_camera| / (c d)` seconds per metre. For a ground-level shot and phones at
-  chest height that is about 0.15 ms per metre, so ±0.5 m is harmless; for a 25 m aerial burst
-  it is 1.5 to 1.9 ms per metre, and a camera whose height is unknown to a building storey
+  `|z_event - z_camera| / (c d)` seconds per meter. For a ground-level shot and phones at
+  chest height that is about 0.15 ms per meter, so ±0.5 m is harmless; for a 25 m aerial burst
+  it is 1.5 to 1.9 ms per meter, and a camera whose height is unknown to a building storey
   contributes almost nothing. Giving the prior lets the solver weight it correctly instead of
   being biased by it.
 
 Reproduce: `python run_test_scenarios.py --z prior` (or `--z free`, `--z truth`).
 
-## Clock synchronisation
+## Clock synchronization
 
 | Situation | Setting | What you get |
 |---|---|---|
@@ -184,7 +184,7 @@ Reproduce: `python run_test_scenarios.py --z prior` (or `--z free`, `--z truth`)
 | Clocks agree to within a known jitter S ms | `--clock_sigma_ms S` | MAP estimate; ellipse widens with S. On a 20 m array, S = 2 ms costs about 1 m |
 | Clocks unknown by more than the array's propagation time | no setting helps | Clear error; use `sync.csv` to align recordings on the event |
 
-If you assume synchronised clocks but they are not, the misfit shows up as a large reduced
+If you assume synchronized clocks but they are not, the misfit shows up as a large reduced
 chi-square and an inflated ellipse that still covers the truth in the tested cases, plus a
 warning.
 
@@ -196,7 +196,7 @@ at every recording apart from noise and echoes, which makes cross-correlation mo
 it will be with real microphones in reverberant spaces; for real data set `--timing_sigma_ms`
 to what your picks actually achieve (0.5 to 2 ms is typical) so the ellipse stays honest.
 
-**Included scenarios** (`python run_test_scenarios.py`, synchronised clocks):
+**Included scenarios** (`python run_test_scenarios.py`, synchronized clocks):
 
 | Scenario | Array | Recordings | Error | 95% ellipse |
 |---|---|---|---|---|
@@ -257,7 +257,7 @@ Runtime is about 0.1 s for six 10 s recordings after audio loading.
 | `--min_snr` | 4.0 | Onset must exceed this multiple of the noise floor; relaxed stepwise to 3.0 if fewer than 3 recordings trigger, with a consistency gate |
 | `--merge_gap_s` | 0.5 | Bursts closer than this to a previous burst are treated as its coda |
 | `--slack_ms` | 5 | Extra tolerance on the physical arrival gate |
-| `--clock_sigma_ms` | 0 | Prior std of clock offsets; 0 = synchronised |
+| `--clock_sigma_ms` | 0 | Prior std of clock offsets; 0 = synchronized |
 | `--source_height_m` | 0 | Event height in the same datum as `height_m`; fixed unless a sigma is given |
 | `--source_height_sigma_m` | 0 | Prior std of the event height; > 0 solves the height |
 | `--source_height_bounds MIN MAX` | 0 5000 | Allowed height range when solving it |
@@ -282,7 +282,7 @@ Runtime is about 0.1 s for six 10 s recordings after audio loading.
 - **"solution sits at the edge of the search area"**: the arrivals do not pin down a location.
   Only raise `--search_radius_m` if the event really was that far away.
 - **"residuals are Nx larger than the assumed timing noise"**: picks are noisier than
-  `--timing_sigma_ms`, the clocks are not synchronised, or `--source_height_m` is wrong. The
+  `--timing_sigma_ms`, the clocks are not synchronized, or `--source_height_m` is wrong. The
   ellipse has been inflated to match.
 - **ffmpeg errors**: install ffmpeg or convert the recordings to WAV.
 
@@ -294,7 +294,7 @@ python -m pytest tests/test_solver.py -q
 python -m pytest --cov=locate_event --cov-report=term-missing
 ```
 
-The suite asserts against ground truth with centimetre and sub-0.1 ms tolerances: geometry,
+The suite asserts against ground truth with centimeter and sub-0.1 ms tolerances: geometry,
 filters and pickers, cross-correlation, association, the solver (perfect data, Monte Carlo
 coverage of the 95% ellipse, outliers, clock prior, mirror ambiguity, heights, validation),
 event-height and recording-height priors (recovery, 3D coverage, the below-plane mirror,
@@ -304,7 +304,7 @@ including the four checked-in scenarios generated on the fly. See [tests/README.
 ## Limitations and roadmap
 
 - Single event only. Estimating clock offsets jointly from several events (fireworks shows,
-  multiple shots) would make truly unsynchronised recordings usable; the solver's parameter
+  multiple shots) would make truly unsynchronized recordings usable; the solver's parameter
   layout allows it but the detector and association would need to handle multiple events.
 - Height observability depends on vertical aperture; with cameras all near one height the
   solved height of a ground-level event is uninformative (the std says so).

@@ -6,7 +6,7 @@ falls inside the 95% ellipse, timing residuals and, in prior mode, clock-offset 
 
 Usage
   python generate_test_data.py            # once, writes the tracks and metadata
-  python run_test_scenarios.py            # synchronised-clock model (default)
+  python run_test_scenarios.py            # synchronized-clock model (default)
   python run_test_scenarios.py --clock_sigma_ms 2 --extra --min_snr 5
 Exit status is 1 if any scenario exceeds --max_error_m.
 """
