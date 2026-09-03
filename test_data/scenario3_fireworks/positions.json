@@ -58,6 +58,11 @@
       "description": "Aerial firework burst 25 m above the stage",
       "height_m": 25.0
     },
+    "height_prior": {
+      "mean_m": 20.0,
+      "sigma_m": 30.0,
+      "description": "Aerial shell, height only roughly known"
+    },
     "time_utc": "2024-07-04T21:15:42.890Z"
   }
 }

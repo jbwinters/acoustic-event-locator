@@ -16,13 +16,19 @@ and score the locator against them with
 ```bash
 python run_test_scenarios.py                         # synchronised clocks
 python run_test_scenarios.py --clock_sigma_ms 2      # after generating with --random_clock_ms 2
+python run_test_scenarios.py --z prior               # solve the event height with each scenario's prior
 ```
+
+In `positions.json`, `height_m` is what the locator sees (the prior mean when `height_sigma_m`
+is set); `true_height_m` is used only by the generator. `event.height_prior` is the prior the
+scorer passes with `--z prior`.
 
 | Scenario | Event | Array | Notes |
 |---|---|---|---|
 | `scenario1_gunshot` | gunshot, 1.2 m high | 4 cameras on the corners of a 17 x 22 m intersection | good geometry, source off-centre |
 | `scenario2_explosion` | explosion at ground level | 5 cameras in an 88 m straight line | collinear: the mirror solution is reported as an alternative |
-| `scenario3_fireworks` | aerial burst 25 m up | 6 cameras in an L (50 x 44 m) | exercises `--source_height_m` |
+| `scenario3_fireworks` | aerial burst 25 m up | 6 cameras in an L (50 x 44 m) | event height solved from a 20 ± 30 m prior |
+| `scenario4_window_shot` | gunshot from a window 9 m up | 4 phones (height 1.5 ± 0.5 m, true 1.2 to 1.8 m), doorbell 1.4 m, mast 6 m, rooftop 22 m | uncertain recording heights (`height_sigma_m`, `true_height_m`) plus a 5 ± 10 m event-height prior |
 
 ## What the generator models
 
@@ -41,7 +47,8 @@ control. Waveforms are identical at every recording apart from noise and echoes.
 
 `source_position_m` (x east, y north in the same local frame the locator uses, i.e. relative to
 `reference`/`reference_point`, else the centroid), `source_height_m`, `source_latlon`,
-`microphone_positions_m` (x, y, z), `clock_offsets_s`, `arrival_times_s` (true arrival of the
+`microphone_positions_m` (true x, y, z), `microphone_height_prior_m`, `microphone_height_sigma_m`,
+`height_prior_m`, `clock_offsets_s`, `arrival_times_s` (true arrival of the
 event in each track, on that recording's own clock), `emission_time_s`, `distances_m`,
 `snr_db` (peak signal over noise RMS), `reflections`, `speed_of_sound_ms`, `sample_rate_hz`,
 `duration_s`, `files`, `format`, `seed`.

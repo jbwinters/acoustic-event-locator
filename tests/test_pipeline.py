@@ -255,7 +255,8 @@ class TestGeneratorScenarios:
         tru = np.array(truth["source_position_m"])
         cands = [est] + [np.array([a["x"], a["y"]]) for a in r["fit"]["alternatives"]]
         err = min(np.linalg.norm(cnd - tru) for cnd in cands)
-        assert err < 0.05
+        # recordings whose height is only known to +-0.5 m cost a few centimetres
+        assert err < (0.15 if any(s > 0 for s in truth["microphone_height_sigma_m"]) else 0.05)
         assert r["fit"]["recordings_used"] == len(truth["files"])
         if "linear" in name or name.startswith("scenario2"):
             assert r["fit"]["ambiguous"]  # collinear cameras: mirror solution reported

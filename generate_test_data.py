@@ -38,7 +38,7 @@ import locate_event as le  # noqa: E402
 
 EVENT_KINDS = ("gunshot", "explosion", "fireworks")
 DEFAULT_CLOCK_OFFSETS_MS = [0.0] * 8  # synchronised by default; see --clock_offsets_ms / --random_clock_ms
-SCENARIOS = ("scenario1_gunshot", "scenario2_explosion", "scenario3_fireworks")
+SCENARIOS = ("scenario1_gunshot", "scenario2_explosion", "scenario3_fireworks", "scenario4_window_shot")
 
 
 # ------------------------------ Synthesis ------------------------------
@@ -160,9 +160,14 @@ def synthesize_scenario(
 
 
 def load_scenario(scenario_dir: str):
+    """Returns (J, mics, (lat0, lon0), c, XYZ_true, source_xyz, kind). XYZ_true uses each entry's
+    `true_height_m` when present (the locator only sees `height_m`, the prior mean)."""
     J = le.read_json(os.path.join(scenario_dir, "positions.json"))
     mics, (lat0, lon0), c = le.parse_positions(J)
     XYZ = le.mic_local_xyz(mics, lat0, lon0)
+    for i, m in enumerate(J["mics"]):
+        if "true_height_m" in m:
+            XYZ[i, 2] = float(m["true_height_m"])
     ev = J.get("event", {})
     loc = ev.get("true_location") or ev.get("estimated_location")
     if loc is None:
@@ -216,14 +221,19 @@ def generate_scenario(scenario_dir, fmt="wav", seed=0, noise_rms=0.003, clock_of
             os.remove(wav_path)
             out_name = stem + ".mp4"
         files.append(out_name)
-        print(f"  {out_name:12s} d={truth['distances_m'][i]:6.1f} m  snr={truth['snr_db'][i]:5.1f} dB  clock={clock[i]*1000:+.1f} ms  arrival={truth['arrival_times_s'][i]:.6f} s")
+        hnote = f"  height {XYZ[i, 2]:.1f} m" + (f" (prior {m.height_m:.1f} +- {m.height_sigma_m:.1f})" if m.height_sigma_m > 0 else "")
+        print(f"  {out_name:12s} d={truth['distances_m'][i]:6.1f} m  snr={truth['snr_db'][i]:5.1f} dB  clock={clock[i]*1000:+.1f} ms  arrival={truth['arrival_times_s'][i]:.6f} s{hnote}")
     lat_s, lon_s = le.local_xy_to_latlon(source[0], source[1], lat0, lon0)
+    hp = J.get("event", {}).get("height_prior")
     truth.update({
         "files": files,
         "format": fmt,
         "seed": seed,
         "source_latlon": {"lat": lat_s, "lon": lon_s},
         "local_frame": {"origin_lat": lat0, "origin_lon": lon0},
+        "microphone_height_prior_m": [m.height_m for m in mics],
+        "microphone_height_sigma_m": [m.height_sigma_m for m in mics],
+        "height_prior_m": ({"mean": float(hp["mean_m"]), "sigma": float(hp["sigma_m"])} if hp else None),
     })
     with open(os.path.join(scenario_dir, "metadata.json"), "w") as f:
         json.dump(truth, f, indent=2)

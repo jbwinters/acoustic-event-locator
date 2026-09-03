@@ -162,6 +162,7 @@ class Mic:
     lat: float
     lon: float
     height_m: float = 0.0
+    height_sigma_m: float = 0.0  # 0 = height known; > 0 = prior std, height is estimated
 
 
 def parse_positions(J: dict) -> Tuple[List[Mic], Tuple[float, float], float]:
@@ -179,8 +180,11 @@ def parse_positions(J: dict) -> Tuple[List[Mic], Tuple[float, float], float]:
                 lat=float(m["lat"]),
                 lon=float(m["lon"]),
                 height_m=float(m.get("height_m", 0.0)),
+                height_sigma_m=float(m.get("height_sigma_m", 0.0)),
             )
         )
+        if mics[-1].height_sigma_m < 0:
+            raise LocatorError(f"height_sigma_m must be >= 0: {m}")
     ref = J.get("reference") or J.get("reference_point")
     if ref:
         lat0, lon0 = float(ref["lat"]), float(ref["lon"])
@@ -223,6 +227,10 @@ def mic_local_xyz(mics: Sequence[Mic], lat0: float, lon0: float) -> np.ndarray:
         x, y = latlon_to_local_xy(m.lat, m.lon, lat0, lon0)
         XYZ[i] = (x, y, m.height_m)
     return XYZ
+
+
+def mic_height_sigma(mics: Sequence[Mic]) -> np.ndarray:
+    return np.array([m.height_sigma_m for m in mics], dtype=float)
 
 
 # ------------------------------ Audio loading ------------------------------
@@ -616,33 +624,37 @@ def associate_onsets(
 # ------------------------------ TDOA solver ------------------------------
 
 
-def distances_3d(s_xy, XYZ, source_z=0.0):
-    dx = XYZ[:, 0] - s_xy[0]
-    dy = XYZ[:, 1] - s_xy[1]
-    dz = XYZ[:, 2] - source_z
+def distances_3d(s, XYZ, source_z=0.0):
+    """Distances from a source given as (x, y) with height source_z, or as (x, y, z)."""
+    s = np.asarray(s, dtype=float)
+    z = s[2] if s.shape[0] > 2 else source_z
+    dx = XYZ[:, 0] - s[0]
+    dy = XYZ[:, 1] - s[1]
+    dz = XYZ[:, 2] - z
     return np.sqrt(dx * dx + dy * dy + dz * dz)
 
 
-def predict_arrivals(s_xy, XYZ, c, source_z=0.0, t0=0.0, delta=None):
+def predict_arrivals(s, XYZ, c, source_z=0.0, t0=0.0, delta=None):
     """t_i = t0 + ||s - x_i||/c + delta_i. Returns (pred, distances)."""
-    d = distances_3d(s_xy, XYZ, source_z)
+    d = distances_3d(s, XYZ, source_z)
     pred = t0 + d / c
     if delta is not None:
         pred = pred + delta
     return pred, d
 
 
-def profile_t0(s_xy, t, XYZ, c, w, source_z=0.0):
+def profile_t0(s, t, XYZ, c, w, source_z=0.0):
     """Weighted least-squares emission time for a fixed position (offsets = 0)."""
-    _, d = predict_arrivals(s_xy, XYZ, c, source_z)
+    _, d = predict_arrivals(s, XYZ, c, source_z)
     return float(np.sum(w * (t - d / c)) / np.sum(w))
 
 
 def grid_search_init(
     t, XYZ, c, w, source_z, bounds, res, n_best=6, min_sep=None, max_points=300_000
 ):
-    """Vectorised grid search of the synchronised-clock cost with t0 profiled out.
-    Returns up to n_best well separated low-cost grid points as [((x, y), cost), ...]."""
+    """Vectorised grid search of the synchronised-clock cost with t0 profiled out, at a fixed
+    source height. Returns up to n_best well separated low-cost grid points as
+    [((x, y), cost), ...]."""
     xmin, xmax, ymin, ymax = bounds
     area = max(xmax - xmin, res) * max(ymax - ymin, res)
     res_eff = max(res, math.sqrt(area / max_points))
@@ -673,6 +685,51 @@ def grid_search_init(
     return picks
 
 
+class _Layout:
+    """Index map of the parameter vector theta = [x, y, (z), t0, (delta_0..M-1), (z_i for
+    recordings with uncertain height)]."""
+
+    def __init__(self, M: int, solve_z: bool, estimate_offsets: bool, height_sigma: np.ndarray):
+        self.M = M
+        self.solve_z = bool(solve_z)
+        self.estimate_offsets = bool(estimate_offsets)
+        self.hidx = np.flatnonzero(np.asarray(height_sigma, dtype=float) > 0)
+        n = 2
+        self.i_z = n if self.solve_z else None
+        n += 1 if self.solve_z else 0
+        self.i_t0 = n
+        n += 1
+        self.i_delta = n if self.estimate_offsets else None
+        n += M if self.estimate_offsets else 0
+        self.i_h = n if len(self.hidx) else None
+        n += len(self.hidx)
+        self.n = n
+        self.n_prior = (1 if self.solve_z else 0) + (M if self.estimate_offsets else 0) + len(self.hidx)
+        self.n_pos = 3 if self.solve_z else 2
+
+    def pack(self, xy, z, t0, delta=None, heights=None):
+        th = np.zeros(self.n)
+        th[0], th[1] = xy[0], xy[1]
+        if self.solve_z:
+            th[self.i_z] = z
+        th[self.i_t0] = t0
+        if self.estimate_offsets and delta is not None:
+            th[self.i_delta : self.i_delta + self.M] = delta
+        if self.i_h is not None and heights is not None:
+            th[self.i_h : self.i_h + len(self.hidx)] = np.asarray(heights)[self.hidx]
+        return th
+
+    def unpack(self, th, XYZ, z_fixed):
+        s = np.array([th[0], th[1], th[self.i_z] if self.solve_z else z_fixed])
+        t0 = th[self.i_t0]
+        delta = th[self.i_delta : self.i_delta + self.M] if self.estimate_offsets else np.zeros(self.M)
+        XYZc = XYZ
+        if self.i_h is not None:
+            XYZc = XYZ.copy()
+            XYZc[self.hidx, 2] = th[self.i_h : self.i_h + len(self.hidx)]
+        return s, t0, delta, XYZc
+
+
 @dataclass
 class TDOASolution:
     s_xy: np.ndarray
@@ -696,6 +753,13 @@ class TDOASolution:
     ambiguous: bool
     rejected: List[int]
     at_boundary: bool = False
+    s_xyz: Optional[np.ndarray] = None
+    z_std: float = 0.0
+    solve_z: bool = False
+    z_at_bound: bool = False
+    cov_pos: Optional[np.ndarray] = None
+    mic_heights: Optional[np.ndarray] = None
+    mic_height_std: Optional[np.ndarray] = None
 
     @property
     def rmse_s(self) -> float:
@@ -716,38 +780,69 @@ def _huber_cost(r_data: np.ndarray, k_norm: np.ndarray, r_prior: np.ndarray) -> 
     return float(np.sum(rho) + 0.5 * np.sum(r_prior * r_prior))
 
 
-def _lm_refine(theta0, t, XYZ, c, sigma_t, source_z, clock_sigma, huber_k, estimate_offsets, max_iter=200, box=None):
-    """Levenberg-Marquardt with Huber IRLS weights on theta = [x, y, t0, (delta_0..delta_{M-1})]."""
+def _lm_refine(theta0, t, XYZ, c, sigma_t, layout, priors, huber_k, box=None, max_iter=200, trace=None):
+    """Levenberg-Marquardt with Huber IRLS weights over the parameters described by `layout`.
+
+    priors: dict with z0, z_sigma, clock_sigma, height_mu (M,), height_sigma (M,).
+    box: (xmin, xmax, ymin, ymax, zmin, zmax); steps leaving it are rejected.
+    trace: optional list that receives theta after each accepted step."""
     M = len(t)
     k_norm = huber_k / sigma_t
-
-    def unpack(th):
-        return th[:2], th[2], (th[3:] if estimate_offsets else np.zeros(M))
+    z0, z_sigma = priors["z0"], priors["z_sigma"]
+    clock_sigma = priors["clock_sigma"]
+    height_mu, height_sigma = priors["height_mu"], priors["height_sigma"]
+    nP = layout.n_prior
 
     def evaluate(th):
-        s, t0, delta = unpack(th)
-        pred, d = predict_arrivals(s, XYZ, c, source_z, t0, delta)
+        s, t0, delta, XYZc = layout.unpack(th, XYZ, z0)
+        pred, d = predict_arrivals(s, XYZc, c, s[2], t0, delta)
         raw = t - pred
         r = raw / sigma_t
-        n_par = len(th)
-        J = np.zeros((M, n_par))
+        J = np.zeros((M, layout.n))
         dsafe = np.maximum(d, 1e-9)
-        J[:, 0] = (s[0] - XYZ[:, 0]) / (c * dsafe)
-        J[:, 1] = (s[1] - XYZ[:, 1]) / (c * dsafe)
-        J[:, 2] = 1.0
-        if estimate_offsets:
-            J[:, 3:] = np.eye(M)
+        J[:, 0] = (s[0] - XYZc[:, 0]) / (c * dsafe)
+        J[:, 1] = (s[1] - XYZc[:, 1]) / (c * dsafe)
+        if layout.solve_z:
+            J[:, layout.i_z] = (s[2] - XYZc[:, 2]) / (c * dsafe)
+        J[:, layout.i_t0] = 1.0
+        if layout.estimate_offsets:
+            J[:, layout.i_delta : layout.i_delta + M] = np.eye(M)
+        if layout.i_h is not None:
+            for k, i in enumerate(layout.hidx):
+                J[i, layout.i_h + k] = (XYZc[i, 2] - s[2]) / (c * dsafe[i])
         J = -J / sigma_t[:, None]
-        if estimate_offsets:
-            rp = -delta / clock_sigma
-            Jp = np.zeros((M, n_par))
-            Jp[:, 3:] = -np.eye(M) / clock_sigma
-            return raw, np.concatenate([r, rp]), np.vstack([J, Jp])
-        return raw, r, J
+        if nP == 0:
+            return raw, r, J
+        rp = np.zeros(nP)
+        Jp = np.zeros((nP, layout.n))
+        row = 0
+        if layout.solve_z:
+            rp[row] = (z0 - s[2]) / z_sigma
+            Jp[row, layout.i_z] = -1.0 / z_sigma
+            row += 1
+        if layout.estimate_offsets:
+            rp[row : row + M] = -delta / clock_sigma
+            Jp[row : row + M, layout.i_delta : layout.i_delta + M] = -np.eye(M) / clock_sigma
+            row += M
+        if layout.i_h is not None:
+            for k, i in enumerate(layout.hidx):
+                rp[row] = (height_mu[i] - XYZc[i, 2]) / height_sigma[i]
+                Jp[row, layout.i_h + k] = -1.0 / height_sigma[i]
+                row += 1
+        return raw, np.concatenate([r, rp]), np.vstack([J, Jp])
+
+    def inside(th):
+        if box is None:
+            return True
+        if not (box[0] <= th[0] <= box[1] and box[2] <= th[1] <= box[3]):
+            return False
+        return (not layout.solve_z) or (box[4] <= th[layout.i_z] <= box[5])
 
     theta = np.array(theta0, dtype=float)
     raw, r, J = evaluate(theta)
     cost = _huber_cost(r[:M], k_norm, r[M:])
+    if trace is not None:
+        trace.append(theta.copy())
     lam = 1e-3
     converged = False
     it = 0
@@ -766,8 +861,8 @@ def _lm_refine(theta0, t, XYZ, c, sigma_t, source_z, clock_sigma, huber_k, estim
             except np.linalg.LinAlgError:
                 step = -np.linalg.lstsq(A, g, rcond=None)[0]
             th_new = theta + step
-            if box is not None and not (box[0] <= th_new[0] <= box[1] and box[2] <= th_new[1] <= box[3]):
-                lam *= 10.0  # step leaves the search area: damp and retry
+            if not inside(th_new):
+                lam *= 10.0
                 if lam > 1e12:
                     break
                 continue
@@ -783,8 +878,10 @@ def _lm_refine(theta0, t, XYZ, c, sigma_t, source_z, clock_sigma, huber_k, estim
             converged = True
             break
         rel = (cost - cost_new) / max(cost, 1e-300)
-        moved = float(np.linalg.norm(step[:2]))
+        moved = float(np.linalg.norm(step[: layout.n_pos]))
         theta, raw, r, J, cost = th_new, raw_new, r_new, J_new, cost_new
+        if trace is not None:
+            trace.append(theta.copy())
         lam = max(lam / 10.0, 1e-15)
         if rel < 1e-12 or moved < 1e-7:
             converged = True
@@ -792,26 +889,38 @@ def _lm_refine(theta0, t, XYZ, c, sigma_t, source_z, clock_sigma, huber_k, estim
     return theta, raw, r, J, cost, converged, it
 
 
-def _fit_all_starts(t, XYZ, c, sigma_t, source_z, clock_sigma, huber_k, estimate_offsets,
-                    search_radius, grid_res, init, n_starts):
+def _fit_all_starts(t, XYZ, c, sigma_t, layout, priors, huber_k, search_radius, grid_res, init, n_starts, trace=None):
     M = len(t)
     w = 1.0 / sigma_t**2
+    z0, z_sigma = priors["z0"], priors["z_sigma"]
+    zmin, zmax = priors["z_bounds"]
     span = float(max(np.ptp(XYZ[:, 0]), np.ptp(XYZ[:, 1]), 1.0))
     R = float(search_radius) if search_radius is not None else max(200.0, 3.0 * span)
     bounds = (XYZ[:, 0].min() - R, XYZ[:, 0].max() + R, XYZ[:, 1].min() - R, XYZ[:, 1].max() + R)
     res = float(grid_res) if grid_res is not None else max(0.25, (2 * R + span) / 400.0)
-    starts = grid_search_init(t, XYZ, c, w, source_z, bounds, res, n_best=n_starts, min_sep=3 * res)
+    # height levels for the grid: the prior mean plus a coarse ladder over its +-3 sigma range
+    if layout.solve_z:
+        lo, hi = max(zmin, z0 - 3 * z_sigma), min(zmax, z0 + 3 * z_sigma)
+        levels = np.unique(np.concatenate([[np.clip(z0, zmin, zmax)], np.linspace(lo, hi, 7)]))
+    else:
+        levels = np.array([z0])
+    starts = []
+    for zl in levels:
+        for xy, cst in grid_search_init(t, XYZ, c, w, zl, bounds, res, n_best=n_starts, min_sep=3 * res):
+            starts.append((xy, zl, cst))
+    starts.sort(key=lambda q: q[2])
+    starts = starts[: max(n_starts, 2 * n_starts if layout.solve_z else n_starts)]
     if init is not None:
-        starts.insert(0, (np.asarray(init, dtype=float)[:2], float("inf")))
+        init = np.asarray(init, dtype=float)
+        starts.insert(0, (init[:2], init[2] if len(init) > 2 else z0, float("inf")))
     # LM may leave the grid but not the search area (plus a margin); a fit that wants to run to
     # infinity (plane-wave degeneracy, inconsistent arrivals) ends up flagged at the boundary.
-    box = (bounds[0] - R, bounds[1] + R, bounds[2] - R, bounds[3] + R)
+    box = (bounds[0] - R, bounds[1] + R, bounds[2] - R, bounds[3] + R, zmin, zmax)
     sols = []
-    for s0, _ in starts:
-        theta0 = np.concatenate(
-            [s0, [profile_t0(s0, t, XYZ, c, w, source_z)], np.zeros(M if estimate_offsets else 0)]
-        )
-        sols.append(_lm_refine(theta0, t, XYZ, c, sigma_t, source_z, clock_sigma, huber_k, estimate_offsets, box=box))
+    for k, (xy, zl, _) in enumerate(starts):
+        theta0 = layout.pack(xy, zl, profile_t0(np.array([xy[0], xy[1], zl]), t, XYZ, c, w), None, priors["height_mu"])
+        tr = trace if (trace is not None and k == 0) else None
+        sols.append(_lm_refine(theta0, t, XYZ, c, sigma_t, layout, priors, huber_k, box=box, trace=tr))
     sols.sort(key=lambda z: z[4])
     return sols, box
 
@@ -830,6 +939,9 @@ def solve_tdoa(
     c: float,
     sigma_t: Optional[Sequence[float]] = None,
     source_z: float = 0.0,
+    source_z_sigma: float = 0.0,
+    source_z_bounds: Tuple[float, float] = (0.0, 5000.0),
+    height_sigma: Optional[Sequence[float]] = None,
     clock_sigma: float = 0.0,
     huber_k: float = 0.002,
     reject_k: Optional[float] = None,
@@ -837,22 +949,31 @@ def solve_tdoa(
     grid_res: Optional[float] = None,
     init: Optional[Sequence[float]] = None,
     n_starts: int = 8,
+    trace: Optional[list] = None,
 ) -> TDOASolution:
     """Robust weighted TDOA multilateration.
 
-    t             arrival times (s) on each recording's own clock
-    XYZ           (M, 3) recording positions in metres
-    sigma_t       per-recording timing standard deviation (s); default 0.5 ms
-    clock_sigma   prior std of per-recording clock offsets (s); 0 = synchronised (offsets fixed)
-    huber_k       residual magnitude (s) beyond which observations are down-weighted
-    reject_k      residual magnitude (s) beyond which an observation is dropped and the fit
-                  repeated, as long as at least 4 recordings remain (default 3 * huber_k;
-                  0 disables). A leave-one-out check additionally catches a single bad
-                  arrival that the fit would otherwise absorb by shifting the source.
-    search_radius grid search extends this far beyond the array bounding box (default
-                  max(200 m, 3 x array extent)); grid_res defaults to ~400 steps across it
-    Alternative minima outside the 95% ellipse of the best solution are reported; the
-    solution is flagged ambiguous when one of them fits within delta_cost <= 3 (~95%).
+    t               arrival times (s) on each recording's own clock
+    XYZ             (M, 3) recording positions in metres (z = height, or its prior mean)
+    sigma_t         per-recording timing standard deviation (s); default 0.5 ms
+    source_z        event height (m): fixed when source_z_sigma == 0, else the prior mean
+    source_z_sigma  prior std of the event height (m); > 0 solves z as a parameter
+    source_z_bounds (min, max) height allowed when solving z (rules out the mirror image
+                    below a horizontal camera plane)
+    height_sigma    per-recording prior std of the height (m); 0 = known. Recordings with
+                    height_sigma > 0 get their height estimated jointly with a prior at XYZ[i, 2]
+    clock_sigma     prior std of per-recording clock offsets (s); 0 = synchronised (offsets fixed)
+    huber_k         residual magnitude (s) beyond which observations are down-weighted
+    reject_k        residual magnitude (s) beyond which an observation is dropped and the fit
+                    repeated, as long as at least 4 recordings remain (default 3 * huber_k;
+                    0 disables). A leave-one-out check additionally catches a single bad
+                    arrival that the fit would otherwise absorb by shifting the source.
+    search_radius   grid search extends this far beyond the array bounding box (default
+                    max(200 m, 3 x array extent)); grid_res defaults to ~400 steps across it
+    trace           optional list receiving the parameter vector after each accepted
+                    Levenberg-Marquardt step of the best start (for visualisation)
+    Alternative minima outside the 95% region of the best solution are reported; the solution
+    is flagged ambiguous when one of them fits within delta_cost <= 3.
     """
     t = np.asarray(t, dtype=float)
     XYZ = np.asarray(XYZ, dtype=float)
@@ -868,20 +989,38 @@ def solve_tdoa(
     sigma_t = np.full(M, 0.5e-3) if sigma_t is None else np.asarray(sigma_t, dtype=float)
     if sigma_t.shape != (M,) or np.any(sigma_t <= 0):
         raise LocatorError("sigma_t must be positive and have one entry per recording")
+    height_sigma = np.zeros(M) if height_sigma is None else np.asarray(height_sigma, dtype=float)
+    if height_sigma.shape != (M,) or np.any(height_sigma < 0):
+        raise LocatorError("height_sigma must be non-negative and have one entry per recording")
+    if source_z_sigma < 0:
+        raise LocatorError("source_z_sigma must be >= 0")
+    zmin, zmax = float(source_z_bounds[0]), float(source_z_bounds[1])
+    if not zmin < zmax:
+        raise LocatorError("source_z_bounds must be (min, max) with min < max")
+    solve_z = source_z_sigma > 0
+    if solve_z and not (zmin <= source_z <= zmax):
+        raise LocatorError("source_z (prior mean) must lie within source_z_bounds")
     estimate_offsets = clock_sigma > 0
     reject_k = 3.0 * huber_k if reject_k is None else float(reject_k)
+    priors_full = {
+        "z0": float(source_z), "z_sigma": float(source_z_sigma) if solve_z else 1.0, "z_bounds": (zmin, zmax),
+        "clock_sigma": float(clock_sigma), "height_mu": XYZ[:, 2].copy(), "height_sigma": height_sigma,
+    }
 
-    def fit(idx):
-        return _fit_all_starts(
-            t[idx], XYZ[idx], c, sigma_t[idx], source_z, clock_sigma, huber_k, estimate_offsets,
-            search_radius, grid_res, init, n_starts,
-        )
+    def fit(idx, tr=None):
+        lay = _Layout(len(idx), solve_z, estimate_offsets, height_sigma[idx])
+        pri = dict(priors_full, height_mu=XYZ[idx, 2], height_sigma=height_sigma[idx])
+        sols, box = _fit_all_starts(t[idx], XYZ[idx], c, sigma_t[idx], lay, pri, huber_k,
+                                    search_radius, grid_res, init, n_starts, trace=tr)
+        return sols, box, lay, pri
 
     active = np.ones(M, dtype=bool)
     rejected: List[int] = []
     while True:
         idx = np.flatnonzero(active)
-        sols, box = fit(idx)
+        if trace is not None:
+            trace.clear()
+        sols, box, layout, priors = fit(idx, trace)
         theta, raw, r, J, cost, converged, iters = sols[0]
         if reject_k <= 0 or len(idx) - 1 < 4:
             break
@@ -895,19 +1034,17 @@ def solve_tdoa(
         # leave-one-out: if dropping one recording removes most of the misfit and that recording
         # then disagrees with the rest by more than 1.5 * huber_k, drop it.
         dof_full = len(r) - len(theta)
-        chi2_full = float(np.sum(_huber_irls_weights(raw, huber_k) * r[:len(idx)] ** 2))
+        chi2_full = float(np.sum(_huber_irls_weights(raw, huber_k) * r[: len(idx)] ** 2))
         if dof_full <= 0 or chi2_full / dof_full < 2.0:
             break
         best_i, best_cost, best_pred = None, cost, None
         for k, i in enumerate(idx):
             sub = np.delete(idx, k)
-            s_sols, _ = fit(sub)
+            s_sols, _, s_lay, _ = fit(sub)
             th_s, _, _, _, cost_s, _, _ = s_sols[0]
             if cost_s < best_cost:
-                d_s = np.zeros(M)
-                if estimate_offsets:
-                    d_s[sub] = th_s[3:]
-                pred_i, _ = predict_arrivals(th_s[:2], XYZ[i:i + 1], c, source_z, th_s[2], d_s[i:i + 1])
+                s_s, t0_s, d_s, XYZc_s = s_lay.unpack(th_s, XYZ[sub], priors_full["z0"])
+                pred_i, _ = predict_arrivals(s_s, XYZ[i : i + 1], c, s_s[2], t0_s, None)
                 best_i, best_cost, best_pred = i, cost_s, float(pred_i[0])
         if best_i is not None and best_cost < 0.25 * cost and abs(t[best_i] - best_pred) > 1.5 * huber_k:
             active[best_i] = False
@@ -926,45 +1063,59 @@ def solve_tdoa(
     chi2 = float(np.sum(hw * r[:Ma] ** 2))
     scale = max(1.0, chi2 / dof) if dof > 0 else 1.0
     cov = cov * scale
+    n_pos = layout.n_pos
+    cov_pos = cov[:n_pos, :n_pos].copy()
     cov_xy = cov[:2, :2].copy()
 
-    s_xy = theta[:2].copy()
-    t0 = float(theta[2])
+    s_xyz, t0, delta_sub, XYZc_sub = layout.unpack(theta, XYZ[idx], priors_full["z0"])
+    s_xy = s_xyz[:2].copy()
     delta_full = np.zeros(M)
     if estimate_offsets:
-        delta_full[idx] = theta[3:]
-    pred_full, _ = predict_arrivals(s_xy, XYZ, c, source_z, t0, delta_full)
+        delta_full[idx] = delta_sub
+    heights_full = XYZ[:, 2].copy()
+    heights_full[idx] = XYZc_sub[:, 2]
+    height_std_full = np.zeros(M)
+    if layout.i_h is not None:
+        height_std_full[idx[layout.hidx]] = np.sqrt(np.maximum(np.diag(cov)[layout.i_h : layout.i_h + len(layout.hidx)], 0.0))
+    XYZ_full = XYZ.copy()
+    XYZ_full[:, 2] = heights_full
+    pred_full, _ = predict_arrivals(s_xyz, XYZ_full, c, s_xyz[2], t0, delta_full)
     raw_full = t - pred_full
     w_full = np.zeros(M)
     w_full[idx] = hw
+    z_std = float(math.sqrt(max(cov[layout.i_z, layout.i_z], 0.0))) if solve_z else 0.0
 
     alternatives = []
-    thr = math.sqrt(5.991)
+    thr = math.sqrt(7.815 if solve_z else 5.991)
+    pos_of = lambda th: th[:n_pos]  # noqa: E731
+    best_pos = pos_of(theta)
     for th, _, _, _, cst, _, _ in sols[1:]:
-        p = th[:2]
-        if _mahalanobis(p, s_xy, cov_xy) <= thr:
+        p = pos_of(th)
+        if _mahalanobis(p, best_pos, cov_pos) <= thr:
             continue
-        if any(_mahalanobis(p, (a["x"], a["y"]), cov_xy) <= thr for a in alternatives):
+        if any(_mahalanobis(p, [a["x"], a["y"]] + ([a["z"]] if solve_z else []), cov_pos) <= thr for a in alternatives):
             continue
         dc = float((cst - cost) / scale)
         if dc > 50.0:
             continue
-        alternatives.append(
-            {"x": float(th[0]), "y": float(th[1]), "cost": float(cst), "delta_cost": dc,
-             "distance_m": float(np.linalg.norm(p - s_xy))}
-        )
+        alt = {"x": float(th[0]), "y": float(th[1]), "z": float(th[layout.i_z]) if solve_z else float(source_z),
+               "cost": float(cst), "delta_cost": dc, "distance_m": float(np.linalg.norm(p - best_pos))}
+        alternatives.append(alt)
     ambiguous = any(a["delta_cost"] <= 3.0 for a in alternatives)
     margin = 0.02 * max(box[1] - box[0], box[3] - box[2])
     at_boundary = bool(
         s_xy[0] - box[0] < margin or box[1] - s_xy[0] < margin or s_xy[1] - box[2] < margin or box[3] - s_xy[1] < margin
     )
+    z_at_bound = bool(solve_z and (abs(s_xyz[2] - zmin) < 1e-6 or abs(s_xyz[2] - zmax) < 1e-6) and abs(source_z - s_xyz[2]) > 1e-6)
 
     return TDOASolution(
-        s_xy=s_xy, t0=t0, delta=delta_full, cov=cov, cov_xy=cov_xy, residuals_s=raw_full,
+        s_xy=s_xy, t0=float(t0), delta=delta_full, cov=cov, cov_xy=cov_xy, residuals_s=raw_full,
         weights=w_full, sigma_t=sigma_t, chi2=chi2, dof=dof, scale=float(scale), cost=float(cost),
         converged=bool(converged), iterations=int(iters), alternatives=alternatives,
         condition_number=cond, degenerate=bool(degenerate), estimate_offsets=bool(estimate_offsets),
         ambiguous=bool(ambiguous), rejected=rejected, at_boundary=at_boundary,
+        s_xyz=s_xyz.copy(), z_std=z_std, solve_z=bool(solve_z), z_at_bound=z_at_bound, cov_pos=cov_pos,
+        mic_heights=heights_full, mic_height_std=height_std_full,
     )
 
 
@@ -986,6 +1137,13 @@ def mahalanobis_xy(sol: TDOASolution, true_xy) -> float:
     return float(math.sqrt(d @ np.linalg.solve(sol.cov_xy, d)))
 
 
+def mahalanobis_pos(sol: TDOASolution, true_pos) -> float:
+    """Mahalanobis distance in the solved position space (2D, or 3D when z was solved)."""
+    n = sol.cov_pos.shape[0]
+    d = np.asarray(true_pos, dtype=float)[:n] - sol.s_xyz[:n]
+    return float(math.sqrt(d @ np.linalg.solve(sol.cov_pos, d)))
+
+
 # ------------------------------ Pipeline ------------------------------
 
 
@@ -998,6 +1156,8 @@ class PipelineParams:
     slack_s: float = 0.005
     clock_sigma_s: float = 0.0
     source_z: float = 0.0
+    source_z_sigma: float = 0.0
+    source_z_bounds: Tuple[float, float] = (0.0, 5000.0)
     huber_k_s: float = 0.002
     timing_sigma_s: float = 0.5e-3
     gcc_weighting: str = "phat"
@@ -1018,6 +1178,8 @@ class TrackResult:
     residual_s: Optional[float] = None
     weight: Optional[float] = None
     clock_offset_s: Optional[float] = None
+    height_m: Optional[float] = None
+    height_std_m: Optional[float] = None
     note: str = ""
 
 
@@ -1027,11 +1189,16 @@ def timing_sigma_from_snr(snr: Sequence[float], base_sigma_s: float) -> np.ndarr
     return base_sigma_s * np.clip(np.sqrt(snr.max() / snr), 1.0, 10.0)
 
 
-def locate_from_signals(signals: Sequence[np.ndarray], fs: int, XYZ: np.ndarray, c: float, p: PipelineParams) -> dict:
-    """Full pipeline on in-memory mono signals. Returns dict with 'solution' (TDOASolution),
-    'tracks' (List[TrackResult]), 'refinement', 'warnings', 'used'."""
+def locate_from_signals(
+    signals: Sequence[np.ndarray], fs: int, XYZ: np.ndarray, c: float, p: PipelineParams,
+    height_sigma: Optional[Sequence[float]] = None,
+) -> dict:
+    """Full pipeline on in-memory mono signals. height_sigma (M,) gives the prior std of each
+    recording's height (0 = known). Returns dict with 'solution' (TDOASolution), 'tracks'
+    (List[TrackResult]), 'refinement', 'warnings', 'used'."""
     M = len(signals)
     XYZ = np.asarray(XYZ, dtype=float)
+    height_sigma = np.zeros(M) if height_sigma is None else np.asarray(height_sigma, dtype=float)
     warnings_out: List[str] = []
     tracks = [TrackResult(index=i, used=False) for i in range(M)]
 
@@ -1107,7 +1274,8 @@ def locate_from_signals(signals: Sequence[np.ndarray], fs: int, XYZ: np.ndarray,
     snrs = [tracks[i].snr for i in used]
     sigma_t = timing_sigma_from_snr(snrs, p.timing_sigma_s)
     sol = solve_tdoa(
-        arrivals, XYZ[used], c, sigma_t=sigma_t, source_z=p.source_z, clock_sigma=p.clock_sigma_s,
+        arrivals, XYZ[used], c, sigma_t=sigma_t, source_z=p.source_z, source_z_sigma=p.source_z_sigma,
+        source_z_bounds=p.source_z_bounds, height_sigma=height_sigma[used], clock_sigma=p.clock_sigma_s,
         huber_k=p.huber_k_s, search_radius=p.search_radius_m, grid_res=p.grid_res_m,
     )
     relaxed = min_ratio < p.min_snr
@@ -1124,6 +1292,8 @@ def locate_from_signals(signals: Sequence[np.ndarray], fs: int, XYZ: np.ndarray,
         tr.residual_s = float(sol.residuals_s[k])
         tr.weight = float(sol.weights[k])
         tr.clock_offset_s = float(sol.delta[k])
+        tr.height_m = float(sol.mic_heights[k])
+        tr.height_std_m = float(sol.mic_height_std[k])
         if k in sol.rejected:
             tr.note = f"rejected as outlier (residual {sol.residuals_s[k]*1000:.2f} ms)"
         elif sol.weights[k] < 0.5:
@@ -1140,6 +1310,12 @@ def locate_from_signals(signals: Sequence[np.ndarray], fs: int, XYZ: np.ndarray,
     if sol.at_boundary:
         warnings_out.append("solution sits at the edge of the search area: the arrivals do not pin down a location "
                             "(increase --search_radius_m only if the event really was that far away)")
+    if sol.solve_z and sol.z_at_bound:
+        warnings_out.append(f"event height ran into its bound ({sol.s_xyz[2]:.1f} m); widen --source_height_bounds "
+                            "if that height is physically possible")
+    if sol.solve_z and sol.z_std > 10.0:
+        warnings_out.append(f"event height is weakly determined (std {sol.z_std:.1f} m): the cameras have little "
+                            "vertical aperture relative to this source")
     if sol.ambiguous:
         alt = min(sol.alternatives, key=lambda a: a["delta_cost"])
         warnings_out.append(f"ambiguous geometry: an alternative solution {alt['distance_m']:.1f} m away fits nearly as well")
@@ -1147,19 +1323,26 @@ def locate_from_signals(signals: Sequence[np.ndarray], fs: int, XYZ: np.ndarray,
         warnings_out.append(f"residuals are {math.sqrt(sol.scale):.1f}x larger than the assumed timing noise; uncertainty inflated accordingly")
     for w in warnings_out:
         log(w, "WARN")
-    return {"solution": sol, "tracks": tracks, "refinement": refinement, "warnings": warnings_out, "used": used}
+    return {"solution": sol, "tracks": tracks, "refinement": refinement, "warnings": warnings_out, "used": used,
+            "height_sigma": height_sigma}
 
 
 # ------------------------------ Plot & I/O ------------------------------
 
 
-def plot_layout(XY, s_xy, cov, out_png, labels=None, alternatives=None, unused=None):
+def plot_layout(XY, s_xy, cov, out_png, labels=None, alternatives=None, unused=None, elevation=None):
+    """Plan view of recordings, estimate and 95% ellipse. If `elevation` is given (dict with
+    mic_z, mic_z_std, source_z, z_std, z_prior=(mean, sigma) or None) a side view is added."""
     a, b, ang_deg = ellipse_from_cov2(cov)
-    fig = plt.figure(figsize=(6.5, 6.0))
-    ax = plt.gca()
     XY = np.asarray(XY, dtype=float)
     unused = set(unused or [])
     used_mask = np.array([i not in unused for i in range(len(XY))])
+    if elevation is None:
+        fig, ax = plt.subplots(figsize=(6.5, 6.0))
+        axes = [ax]
+    else:
+        fig, axes = plt.subplots(1, 2, figsize=(12.0, 6.0), gridspec_kw={"width_ratios": [1.15, 1]})
+        ax = axes[0]
     ax.scatter(XY[used_mask, 0], XY[used_mask, 1], marker="^", s=60, label="Recordings")
     if (~used_mask).any():
         ax.scatter(XY[~used_mask, 0], XY[~used_mask, 1], marker="x", s=60, c="grey", label="Not used")
@@ -1180,6 +1363,32 @@ def plot_layout(XY, s_xy, cov, out_png, labels=None, alternatives=None, unused=N
     ax.legend(fontsize=8)
     ax.set_xlabel("x east (m)")
     ax.set_ylabel("y north (m)")
+    ax.set_title("Plan view")
+    if elevation is not None:
+        ax2 = axes[1]
+        mic_z = np.asarray(elevation["mic_z"], dtype=float)
+        mic_z_std = np.asarray(elevation.get("mic_z_std", np.zeros(len(mic_z))), dtype=float)
+        ax2.axhline(0.0, color="k", lw=0.8, alpha=0.5)
+        ax2.errorbar(XY[used_mask, 0], mic_z[used_mask], yerr=2 * mic_z_std[used_mask], fmt="^", ms=7,
+                     capsize=3, label="Recordings (height, 95%)")
+        if (~used_mask).any():
+            ax2.scatter(XY[~used_mask, 0], mic_z[~used_mask], marker="x", c="grey", s=60)
+        zp = elevation.get("z_prior")
+        if zp is not None and zp[1] > 0:
+            ax2.axhspan(zp[0] - 2 * zp[1], zp[0] + 2 * zp[1], color="tab:orange", alpha=0.12, label="Height prior (95%)")
+        ax2.errorbar([s_xy[0]], [elevation["source_z"]], yerr=[[2 * elevation["z_std"]], [2 * elevation["z_std"]]],
+                     fmt="*", ms=14, capsize=4, color="tab:orange", label="Estimated event (height, 95%)")
+        if alternatives:
+            ax2.scatter([q["x"] for q in alternatives], [q.get("z", elevation["source_z"]) for q in alternatives],
+                        marker="o", facecolors="none", edgecolors="tab:red", s=80)
+        if labels:
+            for (x, _), z, lb in zip(XY, mic_z, labels):
+                ax2.annotate(lb, (x, z), textcoords="offset points", xytext=(4, 4), fontsize=8)
+        ax2.grid(True, alpha=0.3)
+        ax2.legend(fontsize=8)
+        ax2.set_xlabel("x east (m)")
+        ax2.set_ylabel("height (m)")
+        ax2.set_title("Elevation view (looking north)")
     fig.tight_layout()
     fig.savefig(out_png, dpi=160)
     plt.close(fig)
@@ -1221,6 +1430,8 @@ def build_results(res: dict, files, XYZ, lat0, lon0, c, p: PipelineParams, fs: i
             "timing_sigma_ms": (tr.sigma_t * 1000 if tr.sigma_t is not None else None),
             "residual_ms": (tr.residual_s * 1000 if tr.residual_s is not None else None),
             "weight": tr.weight,
+            "height_m": tr.height_m,
+            "height_std_m": tr.height_std_m,
             "note": tr.note,
         })
     refinement = None
@@ -1236,11 +1447,23 @@ def build_results(res: dict, files, XYZ, lat0, lon0, c, p: PipelineParams, fs: i
             ],
         }
     return {
-        "event_location_local_m": {"x": float(sol.s_xy[0]), "y": float(sol.s_xy[1]), "z": float(p.source_z)},
-        "event_location_wgs84": {"lat": float(lat), "lon": float(lon), "alt_m": float(p.source_z)},
+        "event_location_local_m": {"x": float(sol.s_xy[0]), "y": float(sol.s_xy[1]), "z": float(sol.s_xyz[2])},
+        "event_location_wgs84": {"lat": float(lat), "lon": float(lon), "alt_m": float(sol.s_xyz[2])},
         "local_frame": {"origin_lat": lat0, "origin_lon": lon0, "x": "east (m)", "y": "north (m)"},
         "confidence_ellipse_95": {"semi_major_m": a95, "semi_minor_m": b95, "angle_deg": ang},
-        "position_std_m": {"x": float(math.sqrt(max(sol.cov_xy[0, 0], 0))), "y": float(math.sqrt(max(sol.cov_xy[1, 1], 0)))},
+        "position_std_m": {"x": float(math.sqrt(max(sol.cov_xy[0, 0], 0))), "y": float(math.sqrt(max(sol.cov_xy[1, 1], 0))),
+                           "z": float(sol.z_std)},
+        "height_model": {
+            "source": {"prior_mean_m": p.source_z, "prior_sigma_m": p.source_z_sigma, "solved": sol.solve_z,
+                       "estimate_m": float(sol.s_xyz[2]), "std_m": float(sol.z_std), "bounds_m": list(p.source_z_bounds),
+                       "at_bound": sol.z_at_bound},
+            "recordings": [
+                {"file": os.path.basename(fn), "prior_m": float(XYZ[i, 2]), "sigma_m": float(hs),
+                 "estimate_m": tr.height_m, "std_m": tr.height_std_m}
+                for i, (fn, tr, hs) in enumerate(zip(files, res["tracks"], res.get("height_sigma", np.zeros(len(files)))))
+                if hs > 0
+            ],
+        },
         "speed_of_sound_mps": c,
         "emission_time_s": sol.t0,
         "clock_model": {"mode": "prior" if sol.estimate_offsets else "synchronised", "clock_sigma_ms": p.clock_sigma_s * 1000},
@@ -1259,6 +1482,7 @@ def build_results(res: dict, files, XYZ, lat0, lon0, c, p: PipelineParams, fs: i
             "degenerate": sol.degenerate,
             "ambiguous": sol.ambiguous,
             "at_search_boundary": sol.at_boundary,
+            "z_at_bound": sol.z_at_bound,
             "alternatives": alts,
         },
         "per_recording": per,
@@ -1266,7 +1490,8 @@ def build_results(res: dict, files, XYZ, lat0, lon0, c, p: PipelineParams, fs: i
         "warnings": res["warnings"],
         "parameters": {
             "fs": fs, "bandpass_hz": list(p.band), "env_ms": p.env_ms, "min_snr": p.min_snr, "merge_gap_s": p.merge_gap_s,
-            "slack_ms": p.slack_s * 1000, "source_height_m": p.source_z, "huber_k_ms": p.huber_k_s * 1000,
+            "slack_ms": p.slack_s * 1000, "source_height_m": p.source_z, "source_height_sigma_m": p.source_z_sigma,
+            "source_height_bounds_m": list(p.source_z_bounds), "huber_k_ms": p.huber_k_s * 1000,
             "timing_sigma_ms": p.timing_sigma_s * 1000, "gcc_weighting": p.gcc_weighting, "refine": p.refine,
             "search_radius_m": p.search_radius_m, "grid_res_m": p.grid_res_m,
         },
@@ -1288,7 +1513,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--merge_gap_s", type=float, default=0.5, help="Onsets closer than this to a previous burst are treated as its coda.")
     ap.add_argument("--slack_ms", type=float, default=5.0, help="Extra tolerance on the physical arrival-time gate.")
     ap.add_argument("--clock_sigma_ms", type=float, default=0.0, help="Prior std of per-recording clock offsets; 0 = synchronised clocks.")
-    ap.add_argument("--source_height_m", type=float, default=0.0, help="Assumed event height (m) in the same datum as height_m.")
+    ap.add_argument("--source_height_m", type=float, default=0.0, help="Event height (m) in the same datum as height_m; fixed unless --source_height_sigma_m > 0, then the prior mean.")
+    ap.add_argument("--source_height_sigma_m", type=float, default=0.0, help="Prior std of the event height (m); > 0 solves the height (3D).")
+    ap.add_argument("--source_height_bounds", type=float, nargs=2, default=(0.0, 5000.0), metavar=("MIN", "MAX"), help="Allowed event height range when solving it.")
     ap.add_argument("--timing_sigma_ms", type=float, default=0.5, help="Assumed arrival-time noise for the strongest recording.")
     ap.add_argument("--huber_k_ms", type=float, default=2.0, help="Residuals beyond this are down-weighted (robustness).")
     ap.add_argument("--search_radius_m", type=float, default=None, help="Search this far beyond the array (default max(200, 3x extent)).")
@@ -1308,6 +1535,8 @@ def params_from_args(args) -> PipelineParams:
         slack_s=args.slack_ms / 1000.0,
         clock_sigma_s=args.clock_sigma_ms / 1000.0,
         source_z=args.source_height_m,
+        source_z_sigma=args.source_height_sigma_m,
+        source_z_bounds=(float(args.source_height_bounds[0]), float(args.source_height_bounds[1])),
         huber_k_s=args.huber_k_ms / 1000.0,
         timing_sigma_s=args.timing_sigma_ms / 1000.0,
         gcc_weighting=args.gcc_weight,
@@ -1328,24 +1557,31 @@ def run(args) -> dict:
     if len(mics) < 3:
         raise LocatorError("need at least 3 recordings to localise in 2D (4 or more recommended)")
     XYZ = mic_local_xyz(mics, lat0, lon0)
+    hsig = mic_height_sigma(mics)
     files = [m.file for m in mics]
+    zmodel = (f"solved, prior {p.source_z:g} +- {p.source_z_sigma:g} m" if p.source_z_sigma > 0 else f"fixed at {p.source_z:g} m")
     log(f"{len(mics)} recordings, speed of sound {c:.2f} m/s, clock model "
-        f"{'prior sigma=%.1f ms' % args.clock_sigma_ms if p.clock_sigma_s > 0 else 'synchronised'}")
+        f"{'prior sigma=%.1f ms' % args.clock_sigma_ms if p.clock_sigma_s > 0 else 'synchronised'}, event height {zmodel}"
+        + (f", {int((hsig > 0).sum())} recording height(s) uncertain" if (hsig > 0).any() else ""))
 
     signals = []
     for m in mics:
         log(f"Loading audio: {os.path.basename(m.file)}")
         signals.append(load_audio(m.file, args.fs, wav_dir))
 
-    res = locate_from_signals(signals, args.fs, XYZ, c, p)
+    res = locate_from_signals(signals, args.fs, XYZ, c, p, height_sigma=hsig)
     sol: TDOASolution = res["solution"]
     results = build_results(res, files, XYZ, lat0, lon0, c, p, args.fs)
     write_json(os.path.join(args.out, "results.json"), results)
     write_sync_csv(os.path.join(args.out, "sync.csv"), files, res["tracks"])
+    elevation = None
+    if sol.solve_z or (hsig > 0).any():
+        elevation = {"mic_z": sol.mic_heights, "mic_z_std": sol.mic_height_std, "source_z": float(sol.s_xyz[2]),
+                     "z_std": sol.z_std, "z_prior": (p.source_z, p.source_z_sigma) if sol.solve_z else None}
     plot_layout(
         XYZ[:, :2], sol.s_xy, sol.cov_xy, os.path.join(args.out, "layout.png"),
         labels=[os.path.basename(f) for f in files], alternatives=sol.alternatives,
-        unused=[i for i in range(len(files)) if i not in res["used"]],
+        unused=[i for i in range(len(files)) if i not in res["used"]], elevation=elevation,
     )
     for tr, fn in zip(res["tracks"], files):
         if tr.used:
@@ -1353,7 +1589,8 @@ def run(args) -> dict:
         else:
             log(f"{os.path.basename(fn)}: not used ({tr.note})")
     e = results["confidence_ellipse_95"]
-    log(f"Estimated location (local m): x={sol.s_xy[0]:.2f}, y={sol.s_xy[1]:.2f}")
+    log(f"Estimated location (local m): x={sol.s_xy[0]:.2f}, y={sol.s_xy[1]:.2f}"
+        + (f", z={sol.s_xyz[2]:.2f} (std {sol.z_std:.2f})" if sol.solve_z else f", z fixed at {sol.s_xyz[2]:.2f}"))
     log(f"Estimated location (lat/lon): lat={results['event_location_wgs84']['lat']:.7f}, lon={results['event_location_wgs84']['lon']:.7f}")
     log(f"95% ellipse: a={e['semi_major_m']:.2f} m, b={e['semi_minor_m']:.2f} m, angle={e['angle_deg']:.1f} deg; "
         f"rmse={sol.rmse_s*1000:.3f} ms, reduced chi2={(sol.chi2/sol.dof if sol.dof>0 else float('nan')):.2f}")

@@ -28,6 +28,11 @@ The diagram is generated from the included synthetic fireworks scenario with
   [Limitations](#limitations-and-roadmap).
 - Cameras in a straight line produce a mirror-image ambiguity. Both solutions are reported and
   the result is flagged `ambiguous`.
+- **Height is optional and honest.** The event height can be fixed, given a prior, or solved
+  freely (`--source_height_sigma_m`), and any recording's height can be marked uncertain
+  (`height_sigma_m`). Whether the height is actually observable depends on the vertical
+  aperture of the cameras, and the reported standard deviation says so. See
+  [Heights and 3D](#heights-and-3d).
 
 ## Quick start
 
@@ -40,7 +45,7 @@ python generate_test_data.py                # synthetic scenarios (WAV; no ffmpe
 python locate_event.py --videos_dir test_data/scenario1_gunshot \
                        --positions test_data/scenario1_gunshot/positions.json --out out/gunshot
 python run_test_scenarios.py                # score all scenarios against their ground truth
-python -m pytest                            # 136 tests, ~15 s
+python -m pytest                            # 157 tests, ~45 s
 ```
 
 ffmpeg is only needed to read video files. If it is missing, generate the test data as WAV
@@ -70,8 +75,14 @@ listed in `positions.json` is missing but a `.wav` with the same stem exists, th
 
 - `reference` (or `reference_point`) is the origin of the local x-east/y-north frame; default is
   the centroid of the recordings. Results are reported in this frame and in WGS84.
-- `height_m` is used in the 3D distance to the event. The event height is `--source_height_m`
-  (default 0). Ignoring a 6 m camera height on a 20 m array moves the estimate by ~0.6 m.
+- `height_m` is used in the 3D distance to the event. Add `height_sigma_m` when a height is only
+  roughly known (a hand-held phone: `1.5` with `height_sigma_m: 0.5`); that height is then
+  estimated jointly under a prior instead of being trusted. Ignoring a 6 m camera height on a
+  20 m array moves the estimate by ~0.6 m.
+- The event height is `--source_height_m` (default 0, fixed). With `--source_height_sigma_m S`
+  it becomes the mean of a prior with std S and the height is solved within
+  `--source_height_bounds` (default 0 to 5000 m, which excludes the mirror image below a
+  horizontal camera plane).
 - The speed of sound comes from `speed_of_sound` if given, else from `temperature_C`.
 - At least 3 recordings are needed; 4 or more give the redundancy required to check the fit
   and reject a bad arrival.
@@ -85,7 +96,11 @@ listed in `positions.json` is missing but a `.wav` with the same stem exists, th
   notes), `refinement` (pairwise cross-correlation lags and quality), `warnings`, `parameters`.
 - `sync.csv`: one row per recording with `arrival_time_s`, `clock_offset_s`,
   `align_to_event_offset_s` (seek offset that puts the event at t = 0) and the residual.
-- `layout.png`: recordings, estimate, 95% ellipse, alternative minima, unused recordings.
+- `layout.png`: recordings, estimate, 95% ellipse, alternative minima, unused recordings; when
+  any height is solved a second panel shows the elevation view with the height prior, the
+  estimate and per-recording height error bars.
+- `results.json` also carries `height_model`: the source height prior, estimate and std, and the
+  same for every recording whose height was uncertain.
 - `wav/`: the mono audio actually analysed.
 
 Read the `warnings` list. The locator prefers a clear failure or a flagged result to a silent
@@ -119,6 +134,36 @@ relaxed detection threshold, and an uncertainty scale well above 1.
    with per-recording timing sigmas (`--timing_sigma_ms`, scaled up for weaker onsets), inflated
    by the reduced chi-square when the residuals exceed the assumed timing noise.
 
+## Heights and 3D
+
+The model is fully 3D; what changes between cases is how many height parameters are free and
+how well the geometry constrains them. All four scenarios below use the same solver.
+
+| Scenario | Cameras | Event height, prior | Recovered height | x, y error |
+|---|---|---|---|---|
+| Window shot (scenario 4) | 4 phones at 1.5 ± 0.5 m, doorbell 1.4 m, mast 6 m, rooftop 22 m | 9 m, prior 5 ± 10 m | -0.02 ± 0.36 m | 0.05 m |
+| Fireworks (scenario 3) | 6 cameras at 1.8 to 3 m, burst 25 m up | 25 m, prior 20 ± 30 m | -0.04 ± 1.97 m | 0.00 m |
+| Gunshot (scenario 1) | 4 cameras at 2.8 to 4.2 m, shot at 1.2 m | free | -0.01 ± 3.1 m, mirror above the camera plane flagged | 0.00 m |
+
+What to expect:
+- A source well above or below the cameras is 3D-locatable from a flat array once timing is
+  sub-millisecond; one camera with real height (a rooftop) shrinks the height uncertainty by
+  a factor of three to five.
+- A source at the same height as the cameras is not: every arrival responds to height the
+  same way, which is absorbed by the emission time. The std reported for z is large and the
+  x, y solution is unaffected.
+- Cameras all in one horizontal plane cannot tell a source h metres above the plane from one h
+  metres below it. The default height bounds remove the underground image; if both are
+  physically possible the second appears under `alternatives`.
+- An uncertain camera height only affects that camera's arrival, by
+  `|z_event - z_camera| / (c d)` seconds per metre. For a ground-level shot and phones at
+  chest height that is about 0.15 ms per metre, so ±0.5 m is harmless; for a 25 m aerial burst
+  it is 1.5 to 1.9 ms per metre, and a camera whose height is unknown to a building storey
+  contributes almost nothing. Giving the prior lets the solver weight it correctly instead of
+  being biased by it.
+
+Reproduce: `python run_test_scenarios.py --z prior` (or `--z free`, `--z truth`).
+
 ## Clock synchronisation
 
 | Situation | Setting | What you get |
@@ -146,6 +191,7 @@ to what your picks actually achieve (0.5 to 2 ms is typical) so the ellipse stay
 | Gunshot, urban intersection | 17 x 22 m square | 4 | 0.00 m | 0.43 x 0.32 m |
 | Explosion, factory fence | 88 m straight line | 5 | 0.00 m to the nearest of two mirror solutions, flagged ambiguous | 1.5 x 0.3 m |
 | Fireworks, 25 m aerial burst | L-shape, 50 x 44 m | 6 | 0.00 m | 0.73 x 0.33 m |
+| Window shot, 9 m up, mixed cameras | 60 x 55 m, heights 1.2 to 22 m | 7 | 0.05 m | 0.35 x 0.29 m |
 
 With clock offsets drawn from N(0, 2 ms) and `--clock_sigma_ms 2`: gunshot 1.40 m, fireworks
 0.21 m, both inside their ellipses.
@@ -187,7 +233,9 @@ Runtime is about 0.1 s for six 10 s recordings after audio loading.
 | `--merge_gap_s` | 0.5 | Bursts closer than this to a previous burst are treated as its coda |
 | `--slack_ms` | 5 | Extra tolerance on the physical arrival gate |
 | `--clock_sigma_ms` | 0 | Prior std of clock offsets; 0 = synchronised |
-| `--source_height_m` | 0 | Assumed event height in the same datum as `height_m` |
+| `--source_height_m` | 0 | Event height in the same datum as `height_m`; fixed unless a sigma is given |
+| `--source_height_sigma_m` | 0 | Prior std of the event height; > 0 solves the height |
+| `--source_height_bounds MIN MAX` | 0 5000 | Allowed height range when solving it |
 | `--timing_sigma_ms` | 0.5 | Assumed timing noise of the strongest recording |
 | `--huber_k_ms` | 2 | Residuals beyond this are down-weighted; 3x this rejects |
 | `--search_radius_m` | max(200, 3x array extent) | Search area beyond the array |
@@ -224,15 +272,17 @@ python -m pytest --cov=locate_event --cov-report=term-missing
 The suite asserts against ground truth with centimetre and sub-0.1 ms tolerances: geometry,
 filters and pickers, cross-correlation, association, the solver (perfect data, Monte Carlo
 coverage of the 95% ellipse, outliers, clock prior, mirror ambiguity, heights, validation),
-the in-memory pipeline, and the command line end to end on WAV input, including the three
-checked-in scenarios generated on the fly. See [tests/README.md](tests/README.md).
+event-height and recording-height priors (recovery, 3D coverage, the below-plane mirror,
+vertical aperture), the in-memory pipeline, and the command line end to end on WAV input,
+including the four checked-in scenarios generated on the fly. See [tests/README.md](tests/README.md).
 
 ## Limitations and roadmap
 
 - Single event only. Estimating clock offsets jointly from several events (fireworks shows,
   multiple shots) would make truly unsynchronised recordings usable; the solver's parameter
   layout allows it but the detector and association would need to handle multiple events.
-- Position is solved in 2D at a fixed height; a 3D solve needs vertical array aperture.
+- Height observability depends on vertical aperture; with cameras all near one height the
+  solved height of a ground-level event is uninformative (the std says so).
 - No wind or temperature-gradient model; the speed of sound is a single number.
 - Not validated on real recordings. Clipping, automatic gain control, microphone directivity
   and reverberation will degrade timing precision below the synthetic figures above.

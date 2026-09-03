@@ -113,5 +113,18 @@
   "local_frame": {
     "origin_lat": 41.881832,
     "origin_lon": -87.623177
-  }
+  },
+  "microphone_height_prior_m": [
+    3.0,
+    3.5,
+    2.8,
+    4.2
+  ],
+  "microphone_height_sigma_m": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "height_prior_m": null
 }

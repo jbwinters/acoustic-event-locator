@@ -1,0 +1,29 @@
+{
+  "description": "Gunshot from a third-floor window - mixed recordings: four phones held by bystanders (height known only roughly), a doorbell camera, a traffic camera and a rooftop camera",
+  "temperature_C": 18.0,
+  "reference_point": {
+    "lat": 41.8812,
+    "lon": -87.6265,
+    "description": "Street corner"
+  },
+  "mics": [
+    {"file": "phone1.mp4", "lat": 41.8812,  "lon": -87.6265, "height_m": 1.5, "height_sigma_m": 0.5, "true_height_m": 1.2, "description": "Bystander phone, held at chest height"},
+    {"file": "phone2.mp4", "lat": 41.8813,  "lon": -87.6259, "height_m": 1.5, "height_sigma_m": 0.5, "true_height_m": 1.8, "description": "Bystander phone, held overhead"},
+    {"file": "phone3.mp4", "lat": 41.8816,  "lon": -87.6264, "height_m": 1.5, "height_sigma_m": 0.5, "true_height_m": 1.4, "description": "Bystander phone"},
+    {"file": "phone4.mp4", "lat": 41.8816,  "lon": -87.6260, "height_m": 1.5, "height_sigma_m": 0.5, "true_height_m": 1.6, "description": "Bystander phone"},
+    {"file": "door.mp4",   "lat": 41.8814,  "lon": -87.6266, "height_m": 1.4, "description": "Doorbell camera, surveyed"},
+    {"file": "traffic.mp4","lat": 41.8811,  "lon": -87.6262, "height_m": 6.0, "description": "Traffic camera on a mast, surveyed"},
+    {"file": "roof.mp4",   "lat": 41.8817,  "lon": -87.6262, "height_m": 22.0, "description": "Rooftop camera, surveyed"}
+  ],
+  "event": {
+    "type": "gunshot",
+    "true_location": {
+      "lat": 41.88145,
+      "lon": -87.62615,
+      "height_m": 9.0,
+      "description": "Third-floor window"
+    },
+    "height_prior": {"mean_m": 5.0, "sigma_m": 10.0, "description": "Somewhere between street level and the upper floors"},
+    "time_utc": "2024-03-02T23:41:07.300Z"
+  }
+}
