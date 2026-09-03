@@ -9,8 +9,10 @@ the event.
 
 ![Demo](docs/demo_diagram.svg)
 
-The diagram is generated from the included synthetic fireworks scenario with
-`python docs/generate_demo_diagram.py`.
+The diagram is the output of an actual run: `python docs/generate_demo_diagram.py` synthesizes
+the fireworks scenario with a fixed seed, runs the locator on it, and draws what came back (the
+estimate with its 95% ellipse to scale and zoomed, the solved height against the truth, and
+every recording's arrival, onset SNR and residual).
 
 ### How it works, animated
 
