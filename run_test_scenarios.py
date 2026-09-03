@@ -37,6 +37,10 @@ def score(results, truth):
     est = np.array([results["event_location_local_m"]["x"], results["event_location_local_m"]["y"]])
     tru = np.array(truth["source_position_m"][:2])
     err = float(np.linalg.norm(est - tru))
+    # An ambiguous geometry (e.g. cameras in a line) yields two solutions that fit equally well;
+    # the locator reports both, so score the nearest reported solution as well.
+    alts = [np.array([a["x"], a["y"]]) for a in results["fit"].get("alternatives", [])]
+    nearest = min([err] + [float(np.linalg.norm(a - tru)) for a in alts])
     a, b, ang = (results["confidence_ellipse_95"][k] for k in ("semi_major_m", "semi_minor_m", "angle_deg"))
     d = tru - est
     ca, sa = np.cos(np.deg2rad(ang)), np.sin(np.deg2rad(ang))
@@ -50,7 +54,7 @@ def score(results, truth):
         tru_rel = tru_off - tru_off.mean()
         offs_err = float(np.max(np.abs(est_rel - tru_rel)) * 1000)
     return {
-        "error_m": err, "inside_95": bool(inside), "a_m": a, "b_m": b, "rmse_ms": results["fit"]["rmse_ms"],
+        "error_m": err, "nearest_m": nearest, "inside_95": bool(inside), "a_m": a, "b_m": b, "rmse_ms": results["fit"]["rmse_ms"],
         "used": results["fit"]["recordings_used"], "total": results["fit"]["recordings_total"],
         "ambiguous": results["fit"]["ambiguous"], "offset_err_ms": offs_err, "warnings": results["warnings"],
     }
@@ -61,7 +65,7 @@ def main(argv=None) -> int:
     ap.add_argument("--scenarios", nargs="+", default=list(SCENARIOS))
     ap.add_argument("--clock_sigma_ms", type=float, default=0.0)
     ap.add_argument("--out", default=os.path.join(HERE, "out", "scenarios"))
-    ap.add_argument("--max_error_m", type=float, default=2.0, help="Fail if any scenario error exceeds this.")
+    ap.add_argument("--max_error_m", type=float, default=0.5, help="Fail if any scenario error (nearest solution when ambiguous) exceeds this.")
     ap.add_argument("--extra", nargs=argparse.REMAINDER, default=[], help="Extra arguments passed to locate_event.py")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args(argv)
@@ -94,18 +98,20 @@ def main(argv=None) -> int:
         rows.append((name, score(results, truth)))
 
     print("\n" + "=" * 78)
-    print(f"{'scenario':22s} {'error':>8s} {'95% ellipse':>14s} {'in':>3s} {'rmse':>8s} {'used':>5s} {'offset err':>10s}")
+    print(f"{'scenario':22s} {'error':>8s} {'nearest':>8s} {'95% ellipse':>14s} {'in':>3s} {'rmse':>8s} {'used':>5s} {'offset err':>10s}")
     failed = False
     for name, s in rows:
         if s is None:
             print(f"{name:22s} FAILED")
             failed = True
             continue
-        flag = "" if s["error_m"] <= args.max_error_m else "  <-- exceeds limit"
-        failed |= s["error_m"] > args.max_error_m
+        scored = s["nearest_m"] if s["ambiguous"] else s["error_m"]
+        flag = "" if scored <= args.max_error_m else "  <-- exceeds limit"
+        failed |= scored > args.max_error_m
         off = f"{s['offset_err_ms']:.2f} ms" if s["offset_err_ms"] is not None else "-"
-        amb = " (ambiguous)" if s["ambiguous"] else ""
-        print(f"{name:22s} {s['error_m']:6.2f} m {s['a_m']:6.2f}x{s['b_m']:5.2f} m {'y' if s['inside_95'] else 'n':>3s} {s['rmse_ms']:5.3f} ms {s['used']:>2d}/{s['total']:<2d} {off:>10s}{amb}{flag}")
+        amb = " (ambiguous: mirror solution also reported)" if s["ambiguous"] else ""
+        print(f"{name:22s} {s['error_m']:6.2f} m {s['nearest_m']:6.2f} m {s['a_m']:6.2f}x{s['b_m']:5.2f} m {'y' if s['inside_95'] else 'n':>3s} {s['rmse_ms']:5.3f} ms {s['used']:>2d}/{s['total']:<2d} {off:>10s}{amb}{flag}")
+    print("error = best solution vs truth; nearest = closest of best and alternative solutions; in = truth inside 95% ellipse")
     print("=" * 78)
     return 1 if failed else 0
 

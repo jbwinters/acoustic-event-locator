@@ -27,7 +27,7 @@
 <text x="82" y="164" fill="#CBD5E1" font-size="18" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="500">Fireworks display - L-shaped camera array in park</text>
 <text x="82" y="196" fill="#93C5FD" font-size="16" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="500">Generated from the included synthetic fireworks scenario data</text>
 <text x="816" y="98" fill="#64748B" font-size="16" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="700">Scenario Snapshot</text>
-<text x="816" y="132" fill="#0F172A" font-size="28" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="700">Above stage - aerial firework burst</text>
+<text x="816" y="132" fill="#0F172A" font-size="28" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="700">Aerial firework burst 25 m above the stage</text>
 <text x="816" y="164" fill="#475569" font-size="15" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="500">Event type: fireworks  |  UTC: 2024-07-04T21:15:42.890Z</text>
 <rect x="816" y="196" width="186" height="104" rx="22" fill="#F8FBFF" stroke="#D5E2F0" />
 <rect x="834" y="214" width="38" height="8" rx="4" fill="#2563EB" />
@@ -44,9 +44,9 @@
 <rect x="1018" y="320" width="186" height="104" rx="22" fill="#F8FBFF" stroke="#D5E2F0" />
 <rect x="1036" y="338" width="38" height="8" rx="4" fill="#7C3AED" />
 <text x="1036" y="368" fill="#64748B" font-size="15" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="500">Clock Skew</text>
-<text x="1036" y="402" fill="#0F172A" font-size="21" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="700">-1.0 to +2.0 ms</text>
+<text x="1036" y="402" fill="#0F172A" font-size="21" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="700">0.0 to +0.0 ms</text>
 <text x="816" y="452" fill="#0F172A" font-size="19" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="700">First Arrival Order</text>
-<text x="816" y="474" fill="#64748B" font-size="14" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="500">Across a 66.5 m aperture, relative to earliest hit</text>
+<text x="816" y="474" fill="#64748B" font-size="14" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="500">Across a 66.7 m aperture, relative to earliest hit</text>
 <rect x="816" y="500" width="366" height="26" rx="13" fill="#F8FBFF" stroke="#DCE7F1" />
 <text x="830" y="517" fill="#0F172A" font-size="14" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="600">cam2</text>
 <rect x="920" y="508" width="110" height="10" rx="5" fill="#D9EAFE" />
@@ -54,29 +54,29 @@
 <text x="1090" y="517" fill="#1E293B" font-size="13" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="600">+0.0 ms</text>
 <rect x="816" y="530" width="366" height="26" rx="13" fill="#F8FBFF" stroke="#DCE7F1" />
 <text x="830" y="547" fill="#0F172A" font-size="14" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="600">cam3</text>
-<rect x="920" y="538" width="110" height="10" rx="5" fill="#D9EAFE" />
+<rect x="920" y="538" width="113" height="10" rx="5" fill="#D9EAFE" />
 <rect x="920" y="538" width="84" height="10" rx="5" fill="#2563EB" />
-<text x="1090" y="547" fill="#1E293B" font-size="13" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="600">+0.0 ms</text>
+<text x="1090" y="547" fill="#1E293B" font-size="13" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="600">+0.7 ms</text>
 <rect x="816" y="560" width="366" height="26" rx="13" fill="#F8FBFF" stroke="#DCE7F1" />
-<text x="830" y="577" fill="#0F172A" font-size="14" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="600">cam5</text>
-<rect x="920" y="568" width="188" height="10" rx="5" fill="#D9EAFE" />
+<text x="830" y="577" fill="#0F172A" font-size="14" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="600">cam4</text>
+<rect x="920" y="568" width="179" height="10" rx="5" fill="#D9EAFE" />
 <rect x="920" y="568" width="84" height="10" rx="5" fill="#2563EB" />
-<text x="1090" y="577" fill="#1E293B" font-size="13" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="600">+20.2 ms</text>
+<text x="1090" y="577" fill="#1E293B" font-size="13" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="600">+15.2 ms</text>
 <rect x="816" y="590" width="366" height="26" rx="13" fill="#F8FBFF" stroke="#DCE7F1" />
-<text x="830" y="607" fill="#0F172A" font-size="14" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="600">cam4</text>
-<rect x="920" y="598" width="188" height="10" rx="5" fill="#D9EAFE" />
+<text x="830" y="607" fill="#0F172A" font-size="14" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="600">cam5</text>
+<rect x="920" y="598" width="183" height="10" rx="5" fill="#D9EAFE" />
 <rect x="920" y="598" width="84" height="10" rx="5" fill="#2563EB" />
-<text x="1090" y="607" fill="#1E293B" font-size="13" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="600">+20.2 ms</text>
+<text x="1090" y="607" fill="#1E293B" font-size="13" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="600">+16.0 ms</text>
 <rect x="816" y="620" width="366" height="26" rx="13" fill="#F8FBFF" stroke="#DCE7F1" />
 <text x="830" y="637" fill="#0F172A" font-size="14" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="600">cam6</text>
-<rect x="920" y="628" width="269" height="10" rx="5" fill="#D9EAFE" />
+<rect x="920" y="628" width="264" height="10" rx="5" fill="#D9EAFE" />
 <rect x="920" y="628" width="84" height="10" rx="5" fill="#2563EB" />
-<text x="1090" y="637" fill="#1E293B" font-size="13" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="600">+41.3 ms</text>
+<text x="1090" y="637" fill="#1E293B" font-size="13" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="600">+33.6 ms</text>
 <rect x="816" y="650" width="366" height="26" rx="13" fill="#F8FBFF" stroke="#DCE7F1" />
 <text x="830" y="667" fill="#0F172A" font-size="14" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="600">cam1</text>
 <rect x="920" y="658" width="270" height="10" rx="5" fill="#D9EAFE" />
 <rect x="920" y="658" width="84" height="10" rx="5" fill="#2563EB" />
-<text x="1090" y="667" fill="#1E293B" font-size="13" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="600">+41.3 ms</text>
+<text x="1090" y="667" fill="#1E293B" font-size="13" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="600">+34.8 ms</text>
 <line x1="106" y1="150" x2="106" y2="650" stroke="#334155" stroke-width="1" stroke-linecap="round" stroke-opacity="0.32" />
 <line x1="180" y1="150" x2="180" y2="650" stroke="#334155" stroke-width="1" stroke-linecap="round" stroke-opacity="0.32" />
 <line x1="254" y1="150" x2="254" y2="650" stroke="#334155" stroke-width="1" stroke-linecap="round" stroke-opacity="0.32" />
@@ -97,42 +97,42 @@
 <text x="102" y="254" fill="#F8FAFC" font-size="20" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="700">Geometry View</text>
 <text x="102" y="280" fill="#93C5FD" font-size="15" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="500">L-shaped camera array</text>
 <text x="102" y="302" fill="#94A3B8" font-size="13" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="500">Real coordinates from test_data/</text>
-<circle cx="381.89" cy="296.0" r="76" fill="#F59E0B" stroke="#FCD34D" stroke-width="2" fill-opacity="0.1" />
-<circle cx="381.89" cy="296.0" r="126" fill="#FB7185" stroke="#FDA4AF" stroke-width="2" fill-opacity="0.06" />
-<line x1="381.89" y1="296.0" x2="148.0" y2="608.0" stroke="#F8FAFC" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="6 8" stroke-opacity="0.45" />
+<circle cx="381.12" cy="296.0" r="76" fill="#F59E0B" stroke="#FCD34D" stroke-width="2" fill-opacity="0.1" />
+<circle cx="381.12" cy="296.0" r="126" fill="#FB7185" stroke="#FDA4AF" stroke-width="2" fill-opacity="0.06" />
+<line x1="381.12" y1="296.0" x2="148.0" y2="608.0" stroke="#F8FAFC" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="6 8" stroke-opacity="0.45" />
 <circle cx="148.0" cy="608.0" r="13" fill="#0EA5E9" stroke="#E0F2FE" stroke-width="3" />
 <rect x="166" y="574" width="112" height="46" rx="16" fill="#E6F4FF" stroke="#C7D9E8" />
 <text x="178.0" y="594.0" fill="#0F172A" font-size="14" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="700">cam1</text>
 <text x="178.0" y="611.0" fill="#475569" font-size="10" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="500">Stage left camera</text>
-<line x1="381.89" y1="296.0" x2="148.0" y2="400.0" stroke="#F8FAFC" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="6 8" stroke-opacity="0.45" />
+<line x1="381.12" y1="296.0" x2="148.0" y2="400.0" stroke="#F8FAFC" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="6 8" stroke-opacity="0.45" />
 <circle cx="148.0" cy="400.0" r="13" fill="#0EA5E9" stroke="#E0F2FE" stroke-width="3" />
 <rect x="166" y="366" width="152" height="46" rx="16" fill="#E6F4FF" stroke="#C7D9E8" />
 <text x="178.0" y="386.0" fill="#0F172A" font-size="14" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="700">cam2</text>
 <text x="178.0" y="403.0" fill="#475569" font-size="10" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="500">Center stage camera</text>
-<line x1="381.89" y1="296.0" x2="148.0" y2="192.0" stroke="#F8FAFC" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="6 8" stroke-opacity="0.45" />
+<line x1="381.12" y1="296.0" x2="148.0" y2="192.0" stroke="#F8FAFC" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="6 8" stroke-opacity="0.45" />
 <circle cx="148.0" cy="192.0" r="13" fill="#0EA5E9" stroke="#E0F2FE" stroke-width="3" />
 <rect x="166" y="210" width="152" height="46" rx="16" fill="#E6F4FF" stroke="#C7D9E8" />
 <text x="178.0" y="230.0" fill="#0F172A" font-size="14" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="700">cam3</text>
 <text x="178.0" y="247.0" fill="#475569" font-size="10" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="500">Stage right camera</text>
-<line x1="381.89" y1="296.0" x2="303.93" y2="608.0" stroke="#F8FAFC" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="6 8" stroke-opacity="0.45" />
-<circle cx="303.93" cy="608.0" r="13" fill="#0EA5E9" stroke="#E0F2FE" stroke-width="3" />
+<line x1="381.12" y1="296.0" x2="303.41" y2="608.0" stroke="#F8FAFC" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="6 8" stroke-opacity="0.45" />
+<circle cx="303.41" cy="608.0" r="13" fill="#0EA5E9" stroke="#E0F2FE" stroke-width="3" />
 <rect x="321" y="574" width="152" height="46" rx="16" fill="#E6F4FF" stroke="#C7D9E8" />
-<text x="333.93" y="594.0" fill="#0F172A" font-size="14" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="700">cam4</text>
-<text x="333.93" y="611.0" fill="#475569" font-size="10" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="500">Audience left camera</text>
-<line x1="381.89" y1="296.0" x2="459.86" y2="608.0" stroke="#F8FAFC" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="6 8" stroke-opacity="0.45" />
-<circle cx="459.86" cy="608.0" r="13" fill="#0EA5E9" stroke="#E0F2FE" stroke-width="3" />
-<rect x="477" y="574" width="152" height="46" rx="16" fill="#E6F4FF" stroke="#C7D9E8" />
-<text x="489.86" y="594.0" fill="#0F172A" font-size="14" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="700">cam5</text>
-<text x="489.86" y="611.0" fill="#475569" font-size="10" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="500">Audience center camera</text>
-<line x1="381.89" y1="296.0" x2="615.78" y2="608.0" stroke="#F8FAFC" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="6 8" stroke-opacity="0.45" />
-<circle cx="615.78" cy="608.0" r="13" fill="#0EA5E9" stroke="#E0F2FE" stroke-width="3" />
-<rect x="445" y="574" width="152" height="46" rx="16" fill="#E6F4FF" stroke="#C7D9E8" />
-<text x="457.78" y="594.0" fill="#0F172A" font-size="14" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="700">cam6</text>
-<text x="457.78" y="611.0" fill="#475569" font-size="10" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="500">Audience right camera</text>
-<polygon points="381.89,278.0 387.89,290.0 399.89,296.0 387.89,302.0 381.89,314.0 375.89,302.0 363.89,296.0 375.89,290.0" fill="url(#halo)" stroke="#FFF7ED" stroke-width="3" />
+<text x="333.41" y="594.0" fill="#0F172A" font-size="14" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="700">cam4</text>
+<text x="333.41" y="611.0" fill="#475569" font-size="10" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="500">Audience left camera</text>
+<line x1="381.12" y1="296.0" x2="458.83" y2="608.0" stroke="#F8FAFC" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="6 8" stroke-opacity="0.45" />
+<circle cx="458.83" cy="608.0" r="13" fill="#0EA5E9" stroke="#E0F2FE" stroke-width="3" />
+<rect x="476" y="574" width="152" height="46" rx="16" fill="#E6F4FF" stroke="#C7D9E8" />
+<text x="488.83" y="594.0" fill="#0F172A" font-size="14" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="700">cam5</text>
+<text x="488.83" y="611.0" fill="#475569" font-size="10" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="500">Audience center camera</text>
+<line x1="381.12" y1="296.0" x2="614.24" y2="608.0" stroke="#F8FAFC" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="6 8" stroke-opacity="0.45" />
+<circle cx="614.24" cy="608.0" r="13" fill="#0EA5E9" stroke="#E0F2FE" stroke-width="3" />
+<rect x="444" y="574" width="152" height="46" rx="16" fill="#E6F4FF" stroke="#C7D9E8" />
+<text x="456.24" y="594.0" fill="#0F172A" font-size="14" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="700">cam6</text>
+<text x="456.24" y="611.0" fill="#475569" font-size="10" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="500">Audience right camera</text>
+<polygon points="381.12,278.0 387.12,290.0 399.12,296.0 387.12,302.0 381.12,314.0 375.12,302.0 363.12,296.0 375.12,290.0" fill="url(#halo)" stroke="#FFF7ED" stroke-width="3" />
 <rect x="403" y="270" width="170" height="58" rx="18" fill="#FFF7ED" stroke="#FED7AA" />
-<text x="419.89" y="294.0" fill="#7C2D12" font-size="15" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="700">synthetic source</text>
-<text x="419.89" y="316.0" fill="#9A3412" font-size="12" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="500">derived from metadata.json</text>
+<text x="419.12" y="294.0" fill="#7C2D12" font-size="15" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="700">synthetic source</text>
+<text x="419.12" y="316.0" fill="#9A3412" font-size="12" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="500">derived from metadata.json</text>
 <text x="88" y="708" fill="#CBD5E1" font-size="15" font-family="IBM Plex Sans, Segoe UI, sans-serif" font-weight="500">This asset is script-generated for the public README.</text>
 <text x="88" y="730" fill="#F8FAFC" font-size="15" font-family="IBM Plex Mono, Segoe UI, sans-serif" font-weight="600">Regenerate with: python docs/generate_demo_diagram.py</text>
 </svg>

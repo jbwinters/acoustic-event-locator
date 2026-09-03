@@ -145,7 +145,7 @@ def build_arrival_rows(files: list[str], arrivals_s: list[float], x: int, y: int
 
 
 def build_svg(positions: dict, metadata: dict) -> str:
-    mic_positions = metadata["microphone_positions_m"]
+    mic_positions = [list(p[:2]) for p in metadata["microphone_positions_m"]]  # x, y (height dropped)
     event_xy = metadata["source_position_m"]
     screen_points, event_point = scale_points(mic_positions, event_xy)
     mics = positions["mics"]

@@ -1,109 +1,49 @@
-# Test Data for Event Location Detector
+# Synthetic test scenarios
 
-This directory contains synthetic test datasets for evaluating the acoustic event location detector system.
-
-## Overview
-
-The test data includes three realistic scenarios with different microphone array geometries and acoustic event types:
-
-1. **scenario1_gunshot** - Urban gunshot detection with 4 cameras in square formation
-2. **scenario2_explosion** - Industrial explosion with 5 cameras in linear array
-3. **scenario3_fireworks** - Fireworks display with 6 cameras in L-shaped array
-
-## File Structure
-
-Each scenario directory contains:
-- `positions.json` - Microphone positions and configuration
-- `cam*.mp4` - Synthetic video files with audio tracks
-- `metadata.json` - Ground truth data for validation
-
-## Generating Test Data
-
-To regenerate the test data:
+Each scenario directory holds a `positions.json` (recording positions plus an `event` block
+with the true location) and, after generation, one audio track per recording and a
+`metadata.json` with the ground truth. Tracks are not checked in; generate them with
 
 ```bash
-# Generate all scenarios
-python generate_test_data.py
-
-# Generate specific scenarios
-python generate_test_data.py --scenarios scenario1_gunshot scenario2_explosion
+python generate_test_data.py                         # all scenarios, WAV (MP4 if ffmpeg is on PATH)
+python generate_test_data.py --scenarios scenario1_gunshot --format wav --seed 7
+python generate_test_data.py --random_clock_ms 2     # unsynchronised clocks, N(0, 2 ms)
+python generate_test_data.py --noise_rms 0.01        # 10 dB more background noise
 ```
 
-## Running Tests
-
-To test the event location detector on these datasets:
+and score the locator against them with
 
 ```bash
-# Test scenario 1 (gunshot)
-python locate_event.py test_data/scenario1_gunshot/positions.json
-
-# Test scenario 2 (explosion) 
-python locate_event.py test_data/scenario2_explosion/positions.json
-
-# Test scenario 3 (fireworks)
-python locate_event.py test_data/scenario3_fireworks/positions.json
+python run_test_scenarios.py                         # synchronised clocks
+python run_test_scenarios.py --clock_sigma_ms 2      # after generating with --random_clock_ms 2
 ```
 
-## Scenario Details
+| Scenario | Event | Array | Notes |
+|---|---|---|---|
+| `scenario1_gunshot` | gunshot, 1.2 m high | 4 cameras on the corners of a 17 x 22 m intersection | good geometry, source off-centre |
+| `scenario2_explosion` | explosion at ground level | 5 cameras in an 88 m straight line | collinear: the mirror solution is reported as an alternative |
+| `scenario3_fireworks` | aerial burst 25 m up | 6 cameras in an L (50 x 44 m) | exercises `--source_height_m` |
 
-### Scenario 1: Urban Gunshot
-- **Location**: Downtown Chicago intersection
-- **Event**: Single gunshot at street level
-- **Microphones**: 4 cameras at building corners (square ~200m array)
-- **Environment**: Urban with moderate ambient noise
-- **Expected accuracy**: ~5-10m due to good geometry
+## What the generator models
 
-### Scenario 2: Industrial Explosion
-- **Location**: Factory district 
-- **Event**: Industrial explosion from storage building
-- **Microphones**: 5 cameras along perimeter fence (linear ~600m array)
-- **Environment**: Industrial with machinery noise
-- **Expected accuracy**: ~10-20m due to linear geometry
+- exact fractional-sample propagation delays from the true source to each recording
+- 1/r amplitude spreading, so signal-to-noise ratio falls with distance
+- independent white background noise per recording (`--noise_rms`, default 0.003 ≈ -50 dBFS)
+- per-recording clock offsets (`--clock_offsets_ms` or `--random_clock_ms`)
+- one to three early reflections per recording with random delay (8 to 60 ms) and gain
+- event waveforms: gunshot (broadband decaying burst plus low-frequency push), explosion
+  (shock front plus 40 to 1500 Hz rumble), fireworks (report followed by a second of crackles)
 
-### Scenario 3: Fireworks Display
-- **Location**: Millennium Park during show
-- **Event**: Aerial firework burst with crackling
-- **Microphones**: 6 cameras in L-shaped array around stage/audience
-- **Environment**: Outdoor with crowd noise
-- **Expected accuracy**: ~5-15m due to good L-shaped geometry
+Not modelled: wind, temperature gradients, microphone directivity, clipping and automatic gain
+control. Waveforms are identical at every recording apart from noise and echoes.
 
-## Validation Data
+## metadata.json
 
-Each scenario includes ground truth data in `metadata.json`:
-- True source position in local coordinates
-- Microphone positions 
-- Clock offsets between devices
-- Theoretical arrival times
-- Signal parameters
+`source_position_m` (x east, y north in the same local frame the locator uses, i.e. relative to
+`reference`/`reference_point`, else the centroid), `source_height_m`, `source_latlon`,
+`microphone_positions_m` (x, y, z), `clock_offsets_s`, `arrival_times_s` (true arrival of the
+event in each track, on that recording's own clock), `emission_time_s`, `distances_m`,
+`snr_db` (peak signal over noise RMS), `reflections`, `speed_of_sound_ms`, `sample_rate_hz`,
+`duration_s`, `files`, `format`, `seed`.
 
-## Synthetic Signal Characteristics
-
-The generated audio includes:
-- **Gunshot**: Sharp impulse with brief ringing (~10ms duration)
-- **Explosion**: Multi-frequency burst with decay (~500ms duration)  
-- **Fireworks**: Initial crack followed by crackling (~1s total duration)
-- **Background**: Gaussian white noise at realistic levels
-- **Physics**: Distance-based attenuation and propagation delays
-- **Clock drift**: Realistic timing offsets between unsynchronized devices
-
-## Usage Tips
-
-1. **Validate installation**: Run the scripts on test data before real deployment
-2. **Parameter tuning**: Use metadata.json to verify algorithm accuracy
-3. **Geometry effects**: Compare results across different array configurations
-4. **Noise robustness**: Test with varying background noise levels
-5. **Clock synchronization**: Observe impact of timing offsets on accuracy
-
-## Expected Results
-
-With default parameters, the location detector should achieve:
-- Position accuracy within 5-20m depending on geometry
-- Clock offset estimation within 1-5ms 
-- Successful detection and localization for all scenarios
-- Confidence ellipses reflecting geometry-dependent uncertainty
-
-Results will vary based on:
-- Microphone array geometry (square > L-shaped > linear)
-- Event signal strength and characteristics
-- Background noise levels
-- Clock synchronization quality
+Current results are in [RESULTS.md](RESULTS.md).

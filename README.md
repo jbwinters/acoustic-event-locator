@@ -1,311 +1,247 @@
 # Acoustic Event Locator
 
-[![Tests](https://img.shields.io/badge/tests-117%20passed-brightgreen)](tests/)
-[![Coverage](https://img.shields.io/badge/coverage-96%25-brightgreen)](TEST_ANALYSIS.md)
-[![Python](https://img.shields.io/badge/python-3.8%2B-blue)](requirements-test.txt)
-
-Acoustic event localization system using Time Difference of Arrival (TDOA) multilateration from unsynchronized videos. Locates gunshots, explosions & impulsive sounds with 4+ microphones. Includes robust signal processing, clock sync, and comprehensive test suite.
+Locate a single impulsive sound (gunshot, explosion, firework burst) from audio recorded by
+several spatially separated devices, using time-difference-of-arrival (TDOA) multilateration.
+Input is a directory of recordings (video files via ffmpeg, or WAV/FLAC directly) and a JSON file
+with each device's GPS position. Output is the event position in local metres and WGS84, a 95%
+confidence ellipse, per-recording arrival times, and the offsets that align every recording on
+the event.
 
 ![Demo](docs/demo_diagram.svg)
 
-The diagram above is generated from the included synthetic fireworks scenario with `python docs/generate_demo_diagram.py`.
+The diagram is generated from the included synthetic fireworks scenario with
+`python docs/generate_demo_diagram.py`.
 
-## Features
+## What it does, and what it cannot do
 
-🎯 **Acoustic Source Localization**
-- TDOA-based multilateration with robust least squares solver
-- Handles unsynchronized recording devices (smartphones, cameras, security systems)
-- Supports 4+ microphone arrays with various geometries
-- Sub-meter accuracy with good array geometry
+- With **time-synchronised recordings** and a non-collinear array the estimate is accurate to
+  centimetres on synthetic data (see [Accuracy](#accuracy)) and the reported ellipse is calibrated.
+- With recordings whose clocks disagree by a known amount (say a few milliseconds of NTP jitter)
+  you can supply that as a prior (`--clock_sigma_ms`); the position error and the ellipse grow
+  accordingly.
+- **One event cannot synchronise unsynchronised recordings.** For any candidate position there
+  is a set of per-device clock offsets that fits the arrivals exactly, so the offsets and the
+  position cannot both be determined from a single event. Recordings started by hand on
+  different phones (offsets of seconds) cannot be localised with this tool; it says so instead
+  of guessing. `sync.csv` still gives the seek offset that aligns each recording on the event.
+  Joint estimation from several events is the way to lift this and is listed under
+  [Limitations](#limitations-and-roadmap).
+- Cameras in a straight line produce a mirror-image ambiguity. Both solutions are reported and
+  the result is flagged `ambiguous`.
 
-🔊 **Signal Processing**
-- GCC-PHAT cross-correlation for time delay estimation
-- AIC and STA-LTA onset detection algorithms  
-- Bandpass filtering and noise reduction
-- Template matching for arrival time refinement
-
-🌍 **Geographic Integration**
-- GPS coordinate input with automatic local projection
-- Confidence ellipse computation from covariance matrices
-- Real-world coordinate output (latitude/longitude)
-- Support for different reference frames and projections
-
-⚡ **Robust Implementation**
-- Huber M-estimator for outlier rejection
-- Clock synchronization for unsynchronized devices
-- Physical constraint validation and gating
-- Comprehensive error handling and edge case management
-
-## Quick Start
-
-### Installation
+## Quick start
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/acoustic-event-locator.git
-cd acoustic-event-locator
+git clone <this repository> && cd acoustic-event-locator
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements-test.txt        # numpy, scipy, soundfile, matplotlib, pytest
 
-# Create virtual environment
-python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements-test.txt
+python generate_test_data.py                # synthetic scenarios (WAV; no ffmpeg needed)
+python locate_event.py --videos_dir test_data/scenario1_gunshot \
+                       --positions test_data/scenario1_gunshot/positions.json --out out/gunshot
+python run_test_scenarios.py                # score all scenarios against their ground truth
+python -m pytest                            # 136 tests, ~15 s
 ```
 
-### Basic Usage
+ffmpeg is only needed to read video files. If it is missing, generate the test data as WAV
+(the default when ffmpeg is absent) and point `--videos_dir` at WAV recordings.
 
-1. **Prepare your data**: Video files with audio tracks and GPS positions file
-2. **Run the locator**:
+## Inputs
 
-```bash
-python locate_event.py --videos_dir /path/to/videos --positions positions.json
-```
+**Recordings**: anything ffmpeg can decode (MP4, MOV, MKV, ...) or WAV/FLAC/OGG. Any sample rate
+and channel count; audio is mixed to mono and resampled to `--fs` (default 48 kHz). If a file
+listed in `positions.json` is missing but a `.wav` with the same stem exists, the WAV is used.
 
-### Example with Test Data
+**positions.json**
 
-Try the system with included synthetic test data:
-
-```bash
-# Generate test scenarios
-python generate_test_data.py
-
-# Run on gunshot scenario
-python locate_event.py --videos_dir test_data/scenario1_gunshot --positions test_data/scenario1_gunshot/positions.json
-
-# Validate all scenarios
-python run_test_scenarios.py
-```
-
-## Input Format
-
-### Video Files
-- MP4, AVI, MOV, or any FFmpeg-supported format
-- Audio track required (any sample rate, mono/stereo)
-- Synchronized start times not required
-
-### Positions File (`positions.json`)
 ```json
 {
   "temperature_C": 20.0,
+  "speed_of_sound": null,
+  "reference": {"lat": 41.881832, "lon": -87.623177},
   "mics": [
-    {
-      "file": "cam1.mp4",
-      "lat": 41.881832,
-      "lon": -87.623177,
-      "height_m": 3.0
-    },
-    {
-      "file": "cam2.mp4", 
-      "lat": 41.881832,
-      "lon": -87.622977,
-      "height_m": 3.5
-    }
+    {"file": "cam1.mp4", "lat": 41.881832, "lon": -87.623177, "height_m": 3.0},
+    {"file": "cam2.mp4", "lat": 41.881832, "lon": -87.622977, "height_m": 3.5},
+    {"file": "cam3.mp4", "lat": 41.881632, "lon": -87.622977, "height_m": 2.8},
+    {"file": "cam4.mp4", "lat": 41.881632, "lon": -87.623177, "height_m": 4.2}
   ]
 }
 ```
 
-## Output
+- `reference` (or `reference_point`) is the origin of the local x-east/y-north frame; default is
+  the centroid of the recordings. Results are reported in this frame and in WGS84.
+- `height_m` is used in the 3D distance to the event. The event height is `--source_height_m`
+  (default 0). Ignoring a 6 m camera height on a 20 m array moves the estimate by ~0.6 m.
+- The speed of sound comes from `speed_of_sound` if given, else from `temperature_C`.
+- At least 3 recordings are needed; 4 or more give the redundancy required to check the fit
+  and reject a bad arrival.
 
-The system outputs:
-- **Estimated location** in local coordinates and GPS (lat/lon)
-- **Confidence ellipse** with uncertainty bounds
-- **Clock offsets** between recording devices
-- **Visualization plot** showing array geometry and result
-- **CSV file** with synchronization data
-- **JSON results** with detailed metadata
+## Outputs (`--out`, default `./out`)
 
-Example output:
-```
-[INFO] Estimated location (local m): x=15.3, y=-8.7
-[INFO] Estimated location (lat/lon): lat=41.8819, lon=-87.6229
-[INFO] 95% ellipse: a=4.2 m, b=2.1 m, angle=45.2°
-```
+- `results.json`: `event_location_local_m`, `event_location_wgs84`, `confidence_ellipse_95`,
+  `position_std_m`, `emission_time_s`, `clock_model`, `fit` (chi-square, degrees of freedom,
+  uncertainty scale, convergence, ambiguity flag, alternative solutions, rejected recordings),
+  `per_recording` (arrival time, clock offset, alignment offset, onset SNR, residual, weight,
+  notes), `refinement` (pairwise cross-correlation lags and quality), `warnings`, `parameters`.
+- `sync.csv`: one row per recording with `arrival_time_s`, `clock_offset_s`,
+  `align_to_event_offset_s` (seek offset that puts the event at t = 0) and the residual.
+- `layout.png`: recordings, estimate, 95% ellipse, alternative minima, unused recordings.
+- `wav/`: the mono audio actually analysed.
 
-## Algorithm Overview
+Read the `warnings` list. The locator prefers a clear failure or a flagged result to a silent
+wrong answer; the flags that matter are `ambiguous`, `at_search_boundary`, `degenerate`, a
+relaxed detection threshold, and an uncertainty scale well above 1.
 
-The system implements a robust TDOA (Time Difference of Arrival) multilateration approach:
+## How it works
 
-1. **Audio Extraction**: Extract audio tracks from video files using FFmpeg
-2. **Onset Detection**: Detect acoustic event arrivals using AIC/STA-LTA algorithms
-3. **Cross-Correlation**: Compute time delays between microphone pairs using GCC-PHAT
-4. **Arrival Refinement**: Template matching for sub-sample precision
-5. **Multilateration**: Solve for source position using robust least squares
-6. **Clock Synchronization**: Estimate and correct for device timing offsets
-7. **Uncertainty Quantification**: Compute confidence bounds from covariance matrix
+1. **Audio**: load or extract, mix to mono, resample, causal Butterworth bandpass
+   (`--bandpass`, default 200 to 4000 Hz). A causal filter is used because zero-phase filtering
+   pre-rings and biases first-arrival picks early.
+2. **Onset detection**: a short trailing RMS envelope (`--env_ms`, 2 ms) against a robust noise
+   floor (20th percentile of the envelope). Every burst exceeding `--min_snr` times the floor
+   becomes a candidate; a burst's coda (crackles, echoes within `--merge_gap_s`) is merged into
+   it. White noise alone peaks at about 2x the floor, so the default 4x has a 2x margin.
+3. **Association**: one candidate per recording is chosen so that all chosen arrivals are
+   mutually consistent with the geometry (|t_i - t_j| <= d_ij / c + slack). A louder unrelated
+   sound in one recording is rejected in favour of the consistent onset; a recording with no
+   consistent onset is excluded and reported.
+4. **Fine pick**: an AIC change-point picker in a window around each candidate.
+5. **Refinement**: pairwise band-limited, regularised GCC-PHAT between recordings with parabolic
+   sub-sample interpolation, fused by weighted least squares into consistent arrival times.
+   Pairs without a clear correlation peak are ignored and reported.
+6. **Solve**: `t_i = t0 + |s - x_i| / c + delta_i`. Vectorised grid search over a wide area,
+   multi-start Levenberg-Marquardt with Huber reweighting, bounded to the search area. A bad
+   arrival is rejected when at least 4 recordings remain, either from its residual or from a
+   leave-one-out check that catches an arrival the fit would otherwise absorb by moving the
+   source. Distinct minima outside the 95% ellipse of the best solution are reported as
+   alternatives.
+7. **Uncertainty**: covariance from the full Fisher matrix (position, emission time, offsets)
+   with per-recording timing sigmas (`--timing_sigma_ms`, scaled up for weaker onsets), inflated
+   by the reduced chi-square when the residuals exceed the assumed timing noise.
 
-### Key Papers
-- Knapp & Carter (1976) - GCC-PHAT algorithm
-- Huber (1981) - Robust M-estimators
-- Akaike (1974) - Information criterion for onset detection
+## Clock synchronisation
 
-## Performance
+| Situation | Setting | What you get |
+|---|---|---|
+| Devices share a clock (common recorder, GPS/PTP-disciplined, or aligned beforehand) | default (`--clock_sigma_ms 0`) | Full accuracy; residuals validate the fit |
+| Clocks agree to within a known jitter S ms | `--clock_sigma_ms S` | MAP estimate; ellipse widens with S. On a 20 m array, S = 2 ms costs about 1 m |
+| Clocks unknown by more than the array's propagation time | no setting helps | Clear error; use `sync.csv` to align recordings on the event |
 
-**Test Results** on synthetic data:
-- **Scenario 1 (Gunshot)**: 13.7m error with square array
-- **Scenario 2 (Explosion)**: 102.9m error with linear array  
-- **Scenario 3 (Fireworks)**: 43.9m error with L-shaped array
+If you assume synchronised clocks but they are not, the misfit shows up as a large reduced
+chi-square and an inflated ellipse that still covers the truth in the tested cases, plus a
+warning.
 
-**Key factors affecting accuracy**:
-- Array geometry (square/triangular > linear)
-- Signal-to-noise ratio
-- Number of microphones (4+ recommended)
-- Clock synchronization quality
+## Accuracy
 
-See [test_data/RESULTS.md](test_data/RESULTS.md) for detailed performance analysis.
+All figures below are from the included synthetic generator (exact fractional-sample delays,
+1/r spreading, independent noise, random early reflections). Synthetic waveforms are identical
+at every recording apart from noise and echoes, which makes cross-correlation more precise than
+it will be with real microphones in reverberant spaces; for real data set `--timing_sigma_ms`
+to what your picks actually achieve (0.5 to 2 ms is typical) so the ellipse stays honest.
 
-## Testing
+**Included scenarios** (`python run_test_scenarios.py`, synchronised clocks):
 
-Run the comprehensive test suite:
+| Scenario | Array | Recordings | Error | 95% ellipse |
+|---|---|---|---|---|
+| Gunshot, urban intersection | 17 x 22 m square | 4 | 0.00 m | 0.43 x 0.32 m |
+| Explosion, factory fence | 88 m straight line | 5 | 0.00 m to the nearest of two mirror solutions, flagged ambiguous | 1.5 x 0.3 m |
+| Fireworks, 25 m aerial burst | L-shape, 50 x 44 m | 6 | 0.00 m | 0.73 x 0.33 m |
 
-```bash
-# Full test suite (117 tests)
-python run_tests.py
+With clock offsets drawn from N(0, 2 ms) and `--clock_sigma_ms 2`: gunshot 1.40 m, fireworks
+0.21 m, both inside their ellipses.
 
-# Individual test categories
-pytest tests/test_signal_processing.py -v
-pytest tests/test_localization.py -v
-pytest tests/test_integration.py -v
+**Signal-to-noise** (gunshot inside a 20 m square, 4 recordings, 12 trials per row):
 
-# Coverage report
-pytest --cov=locate_event --cov-report=html
-```
+| Peak SNR in band | Median error | 90th pct | Solved |
+|---|---|---|---|
+| 35 to 48 dB | 0.000 m | 0.000 m | 12/12 |
+| 24 to 37 dB | 0.001 m | 0.001 m | 12/12 |
+| 18 to 31 dB | 0.001 m | 0.003 m | 12/12 |
+| 15 to 28 dB | 0.002 m | 0.004 m | 11/12 |
+| 10 to 23 dB | 0.004 m | 0.006 m | 4/12 (detection floor) |
 
-**Test Coverage**: 96% with 117 test cases covering:
-- Unit tests for all algorithms
-- Integration tests with realistic scenarios  
-- Error handling and edge cases
-- Numerical accuracy validation
-- End-to-end pipeline testing
+**Distance** (same array, source moved outward, 6 trials per row):
 
-## Use Cases
+| Distance from array | Median error | Ellipse semi-major | Solved |
+|---|---|---|---|
+| 10 m | 0.00 m | 0.7 m | 6/6 |
+| 30 m | 0.00 m | 5.8 m | 6/6 |
+| 60 m | 0.02 m | 17 m | 6/6 |
+| 100 m | 0.11 m | 45 m | 6/6 |
+| 200 m | 0.88 m (one 185 m miss) | 170 m | 5/6 |
+| 400 m | not detected | | 0/6 |
 
-### Security & Safety
-- **Gunshot detection** for urban surveillance systems
-- **Explosion localization** in industrial facilities
-- **Perimeter security** with distributed sensor networks
-- **Emergency response** coordination
+Far outside the array the bearing is well determined and the range is not; the ellipse says so.
+A wider array, not a better algorithm, is what fixes that.
 
-### Research & Development
-- **Acoustic source localization** algorithm development
-- **Sensor fusion** and multi-modal detection systems
-- **Signal processing** research and validation
-- **Performance benchmarking** for localization systems
+Runtime is about 0.1 s for six 10 s recordings after audio loading.
 
-### Wildlife & Environmental
-- **Animal call localization** (with appropriate signal types)
-- **Seismic event detection** from acoustic signatures
-- **Infrastructure monitoring** for unusual acoustic events
+## Options
 
-## Requirements
-
-### System Requirements
-- Python 3.8+
-- FFmpeg (for audio extraction)
-- 4+ GB RAM (depends on audio file sizes)
-- Modern CPU (multicore recommended)
-
-### Python Dependencies
-- numpy, scipy - Numerical computing
-- soundfile - Audio file I/O
-- matplotlib - Visualization
-- pytest - Testing framework
-
-See [requirements-test.txt](requirements-test.txt) for complete dependency list.
-
-### Hardware Requirements
-- **Minimum**: 4 microphones/cameras with audio
-- **Recommended**: 6+ devices for redundancy
-- **Array geometry**: Non-linear arrangement preferred
-- **Coverage area**: 100m - 1km typical range
-- **Synchronization**: GPS time sync preferred but not required
-
-## Configuration
-
-### Algorithm Parameters
-- `--bandpass 200 4000`: Frequency range for filtering (Hz)
-- `--grid_res_m 5.0`: Grid resolution for initialization (meters)
-- `--huber_k_ms 2.0`: Huber robust estimator threshold (ms)
-- `--fs 48000`: Target audio sample rate (Hz)
-
-### Advanced Options
-- `--assume_3d`: Enable 3D localization (requires height data)
-- `--out output_dir`: Custom output directory
-- Temperature compensation via `temperature_C` in positions file
-- Custom speed of sound via `speed_of_sound` parameter
+| Option | Default | Meaning |
+|---|---|---|
+| `--fs` | 48000 | Working sample rate |
+| `--bandpass LOW HIGH` | 200 4000 | Analysis band (Hz) |
+| `--env_ms` | 2.0 | Onset-detection RMS window |
+| `--min_snr` | 4.0 | Onset must exceed this multiple of the noise floor; relaxed stepwise to 3.0 if fewer than 3 recordings trigger, with a consistency gate |
+| `--merge_gap_s` | 0.5 | Bursts closer than this to a previous burst are treated as its coda |
+| `--slack_ms` | 5 | Extra tolerance on the physical arrival gate |
+| `--clock_sigma_ms` | 0 | Prior std of clock offsets; 0 = synchronised |
+| `--source_height_m` | 0 | Assumed event height in the same datum as `height_m` |
+| `--timing_sigma_ms` | 0.5 | Assumed timing noise of the strongest recording |
+| `--huber_k_ms` | 2 | Residuals beyond this are down-weighted; 3x this rejects |
+| `--search_radius_m` | max(200, 3x array extent) | Search area beyond the array |
+| `--grid_res_m` | auto | Initial grid resolution |
+| `--gcc_weight` | phat | `phat`, `cc` or `scot` weighting for refinement |
+| `--no_refine` | | Skip cross-correlation refinement (AIC picks only) |
+| `--verbose` | | Debug logging |
 
 ## Troubleshooting
 
-### Common Issues
+- **"only N recording(s) have a mutually consistent onset"**: the event is inaudible in some
+  recordings, the positions are wrong, or the clocks differ by more than the propagation time.
+  Check `--verbose` output for the candidates found per recording.
+- **"onsets were only found at a relaxed detection threshold and they are not mutually
+  consistent"**: the event is too faint; try a narrower `--bandpass` around its energy or drop
+  the weak recordings.
+- **"ambiguous geometry"**: cameras are (nearly) collinear; both solutions are in `results.json`.
+  Add a recording off the line.
+- **"solution sits at the edge of the search area"**: the arrivals do not pin down a location.
+  Only raise `--search_radius_m` if the event really was that far away.
+- **"residuals are Nx larger than the assumed timing noise"**: picks are noisier than
+  `--timing_sigma_ms`, the clocks are not synchronised, or `--source_height_m` is wrong. The
+  ellipse has been inflated to match.
+- **ffmpeg errors**: install ffmpeg or convert the recordings to WAV.
 
-**"Few valid pairs remained after gating"**
-- Check microphone positions for accuracy
-- Verify audio quality and SNR
-- Consider adjusting bandpass filter range
-- Ensure adequate array geometry
+## Testing
 
-**Poor localization accuracy**
-- Improve array geometry (avoid linear arrangements)
-- Add more microphones for redundancy
-- Check for timing synchronization issues
-- Validate GPS coordinates
-
-**FFmpeg extraction errors**
-- Ensure FFmpeg is installed and in PATH
-- Check video file format compatibility
-- Verify audio tracks are present in videos
-
-### Debug Mode
-Enable verbose logging:
 ```bash
-python locate_event.py --videos_dir data --positions pos.json --verbose
+python -m pytest                    # full suite
+python -m pytest tests/test_solver.py -q
+python -m pytest --cov=locate_event --cov-report=term-missing
 ```
 
-## Contributing
+The suite asserts against ground truth with centimetre and sub-0.1 ms tolerances: geometry,
+filters and pickers, cross-correlation, association, the solver (perfect data, Monte Carlo
+coverage of the 95% ellipse, outliers, clock prior, mirror ambiguity, heights, validation),
+the in-memory pipeline, and the command line end to end on WAV input, including the three
+checked-in scenarios generated on the fly. See [tests/README.md](tests/README.md).
 
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature-name`
-3. Make changes and add tests
-4. Run test suite: `python run_tests.py`
-5. Submit pull request
+## Limitations and roadmap
 
-### Development Setup
-```bash
-# Install development dependencies
-pip install -r requirements-test.txt
-
-# Run tests with coverage
-pytest --cov=locate_event
-
-# Generate test data
-python generate_test_data.py
-```
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Citation
-
-If you use this software in research, please cite:
-
-```bibtex
-@software{acoustic_event_locator,
-  title={Acoustic Event Locator: TDOA-based Source Localization},
-  author={Your Name},
-  year={2024},
-  url={https://github.com/yourusername/acoustic-event-locator}
-}
-```
+- Single event only. Estimating clock offsets jointly from several events (fireworks shows,
+  multiple shots) would make truly unsynchronised recordings usable; the solver's parameter
+  layout allows it but the detector and association would need to handle multiple events.
+- Position is solved in 2D at a fixed height; a 3D solve needs vertical array aperture.
+- No wind or temperature-gradient model; the speed of sound is a single number.
+- Not validated on real recordings. Clipping, automatic gain control, microphone directivity
+  and reverberation will degrade timing precision below the synthetic figures above.
 
 ## Acknowledgments
 
-- GCC-PHAT algorithm from Knapp & Carter (1976)
-- Robust estimation techniques from Huber (1981)
-- AIC onset detection from Akaike (1974)
-- Signal processing implementations inspired by ObsPy project
-- Test methodologies adapted from scikit-learn testing practices
+GCC-PHAT after Knapp and Carter (1976); Huber M-estimation (1981); AIC onset picking after
+Maeda (1985).
 
----
+## License
 
-**🔊 Ready to locate acoustic events? Start with the [Quick Start](#quick-start) guide!**
+This project is licensed under the MIT License.

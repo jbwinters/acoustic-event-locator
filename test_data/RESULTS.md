@@ -1,44 +1,41 @@
-# Test Results Summary
+# Scenario results
 
-## System Performance on Synthetic Data
+Produced by `python generate_test_data.py` followed by `python run_test_scenarios.py`
+(seed 0, noise RMS 0.003, reflections on). Errors are 2D position errors against the ground
+truth in `metadata.json`; "nearest" is the closest of the best and any alternative solution.
 
-The event location detector has been tested on three realistic scenarios with synthetic audio data:
+## Synchronised clocks (default)
 
-### Test Results
+| Scenario | Recordings used | Error | Nearest | 95% ellipse | Truth inside | Timing RMSE |
+|---|---|---|---|---|---|---|
+| scenario1_gunshot | 4/4 | 0.00 m | 0.00 m | 0.43 x 0.32 m | yes | 0.000 ms |
+| scenario2_explosion | 5/5 | 16.60 m | 0.00 m | 1.48 x 0.29 m | no (mirror) | 0.000 ms |
+| scenario3_fireworks | 6/6 | 0.00 m | 0.00 m | 0.73 x 0.33 m | yes | 0.001 ms |
 
-| Scenario | Event Type | Array Geometry | Position Error | Assessment |
-|----------|------------|----------------|----------------|------------|
-| scenario1_gunshot | Gunshot | 4 mics (square) | 13.7m | ✓ Good accuracy |
-| scenario2_explosion | Explosion | 5 mics (linear) | 102.9m | ✗ Poor accuracy |
-| scenario3_fireworks | Fireworks | 6 mics (L-shaped) | 43.9m | ⚠ Moderate accuracy |
+The five explosion cameras lie on one straight line, so a source at x = +8.3 m and its mirror
+image at x = -8.3 m produce identical arrival times. The locator reports both and flags the
+result `ambiguous`; the one it lists first is a coin toss. Camera heights do not break this
+symmetry because all cameras sit in the same vertical plane.
 
-### Analysis
+## Clock offsets drawn from N(0, 2 ms)
 
-**Scenario 1 (Gunshot)**: Best performance with square array geometry providing good triangulation. The 13.7m error is reasonable for urban gunshot detection.
+Generated with `--random_clock_ms 2 --seed 3`, solved with `--clock_sigma_ms 2`:
 
-**Scenario 2 (Explosion)**: Poor performance due to linear array geometry which provides weak triangulation in the perpendicular direction. The 102.9m error indicates the inherent limitations of linear arrays.
+| Scenario | Error | 95% ellipse | Truth inside | Max offset error |
+|---|---|---|---|---|
+| scenario1_gunshot | 1.40 m | 1.60 x 1.12 m | yes | 3.5 ms |
+| scenario2_explosion | 16.43 m (nearest 0.6 m) | 4.86 x 0.92 m | mirror | 1.2 ms |
+| scenario3_fireworks | 0.21 m | 2.76 x 1.29 m | yes | 0.5 ms |
 
-**Scenario 3 (Fireworks)**: Moderate performance with L-shaped array. The 43.9m error is acceptable for firework localization where precise positioning is less critical.
+The same data solved with the default synchronised model: gunshot 1.94 m (ellipse 2.6 x 1.8 m,
+truth inside), fireworks 0.58 m (ellipse 3.9 x 1.6 m, truth inside), each with a warning that
+the residuals are several times the assumed timing noise. One event cannot determine the
+offsets themselves; the prior only limits the damage.
 
-### Key Findings
+## Reading the numbers
 
-1. **Geometry matters**: Square/rectangular arrays significantly outperform linear arrays
-2. **Signal type impact**: Sharp impulses (gunshots) are easier to localize than distributed signals (fireworks)
-3. **Clock synchronization**: The system successfully operates with unsynchronized devices
-4. **Scalability**: Handles 4-6 microphone arrays effectively
-
-### Recommendations
-
-1. **Array design**: Use non-linear geometries (square, L-shaped, or triangular) for better accuracy
-2. **Microphone count**: 4-6 microphones provide good redundancy without excessive complexity
-3. **Geometry validation**: Consider geometric dilution of precision (GDOP) in array planning
-4. **Signal conditioning**: Sharp acoustic events provide better localization than diffuse sounds
-
-### Technical Details
-
-- All scenarios used realistic clock offsets (±2ms) between unsynchronized devices
-- Distance-based signal attenuation was included in synthetic data
-- Background noise levels were set to realistic values for each environment
-- The TDOA multilateration algorithm converged quickly (2 iterations) in all cases
-
-This validation demonstrates the system's capability to locate acoustic events in realistic scenarios while highlighting the critical importance of microphone array geometry for accurate positioning.
+- Millimetre errors on synthetic data reflect identical waveforms at every recording. Real
+  microphones, reverberation and clipping will limit timing precision to roughly 0.5 to 2 ms,
+  i.e. 0.2 to 0.7 m of range difference; set `--timing_sigma_ms` accordingly.
+- Accuracy is governed by geometry: inside or near a non-collinear array errors stay small; far
+  outside, range becomes poorly determined and the ellipse stretches along the line of sight.
