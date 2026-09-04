@@ -163,7 +163,7 @@ class TestRecordingHeights:
         t[3] += 0.008
         sol = le.solve_tdoa(t, XYZ_prior, C, sigma_t=np.full(6, 0.2e-3), height_sigma=hs,
                             source_z=10.0, source_z_sigma=50.0)
-        assert sol.rejected == [3]
+        assert sol.occluded == [3] and sol.weights[3] < 0.05  # +8 ms is a detour under the occlusion model
         assert pos_error(sol, AERIAL[:2]) < 0.5 and abs(sol.s_xyz[2] - 25.0) < 1.5
         assert le.mahalanobis_pos(sol, AERIAL) < 3.0
 

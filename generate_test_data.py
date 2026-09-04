@@ -38,7 +38,7 @@ import locate_event as le  # noqa: E402
 
 EVENT_KINDS = ("gunshot", "explosion", "fireworks")
 DEFAULT_CLOCK_OFFSETS_MS = [0.0] * 8  # synchronized by default; see --clock_offsets_ms / --random_clock_ms
-SCENARIOS = ("scenario1_gunshot", "scenario2_explosion", "scenario3_fireworks", "scenario4_window_shot")
+SCENARIOS = ("scenario1_gunshot", "scenario2_explosion", "scenario3_fireworks", "scenario4_window_shot", "scenario5_urban_canyon")
 
 
 # ------------------------------ Synthesis ------------------------------
@@ -114,8 +114,14 @@ def synthesize_scenario(
     level_at_10m=0.5,
     reflections=True,
     rng=None,
+    detours_m=None,
+    occlusion_lowpass_hz=1200.0,
 ):
-    """Synthesize one track per recording. Returns (tracks, truth dict)."""
+    """Synthesize one track per recording. Returns (tracks, truth dict).
+
+    detours_m: per-recording extra path length (m) for recordings whose direct path is blocked.
+    Their arrival is delayed by detour / c, the waveform is low-passed (diffraction strips the
+    highs; causal 2nd-order Butterworth at occlusion_lowpass_hz) and attenuated by 6 dB."""
     rng = np.random.default_rng(0) if rng is None else rng
     XYZ = np.asarray(XYZ, dtype=float)
     source_xyz = np.asarray(source_xyz, dtype=float)
@@ -123,9 +129,14 @@ def synthesize_scenario(
     clock = np.zeros(M) if clock_offsets_s is None else np.asarray(clock_offsets_s, dtype=float)[:M]
     if len(clock) < M:
         clock = np.concatenate([clock, np.zeros(M - len(clock))])
+    detours = np.zeros(M) if detours_m is None else np.asarray(detours_m, dtype=float)[:M]
+    if len(detours) < M:
+        detours = np.concatenate([detours, np.zeros(M - len(detours))])
     d = np.linalg.norm(XYZ - source_xyz, axis=1)
-    t_true = emission_s + d / c + clock
+    t_true = emission_s + (d + detours) / c + clock  # occluded recordings hear the detoured path first
     event = event_waveform(kind, fs, rng)
+    sos_occ = butter(2, occlusion_lowpass_hz / (fs / 2), btype="low", output="sos")
+    event_occluded = sosfilt(sos_occ, event) * 0.5
     tracks, snr_db, refl_all = [], [], []
     for i in range(M):
         gain = level_at_10m * 10.0 / max(d[i], 1.0)
@@ -133,7 +144,8 @@ def synthesize_scenario(
         if reflections:
             for _ in range(int(rng.integers(1, 4))):
                 refl.append((float(rng.uniform(0.008, 0.06)), float(rng.uniform(0.15, 0.5))))
-        x, clean = render_track(event, fs, duration_s, t_true[i], gain, noise_rms, rng, refl)
+        ev_i = event_occluded if detours[i] > 0 else event
+        x, clean = render_track(ev_i, fs, duration_s, t_true[i], gain, noise_rms, rng, refl)
         tracks.append(x)
         snr_db.append(float(20 * np.log10(np.max(np.abs(clean)) / noise_rms)))
         refl_all.append(refl)
@@ -152,6 +164,7 @@ def synthesize_scenario(
         "noise_rms": float(noise_rms),
         "snr_db": snr_db,
         "reflections": refl_all,
+        "occlusion_detour_m": detours.tolist(),
     }
     return tracks, truth
 
@@ -204,9 +217,11 @@ def generate_scenario(scenario_dir, fmt="wav", seed=0, noise_rms=0.003, clock_of
     else:
         ms = DEFAULT_CLOCK_OFFSETS_MS if clock_offsets_ms is None else clock_offsets_ms
         clock = np.array(ms, dtype=float)[:M] / 1000.0
+    detours = [float(m.get("occlusion_detour_m", 0.0)) for m in J["mics"]]
     tracks, truth = synthesize_scenario(
         XYZ, source, c, kind, fs=48000, duration_s=duration_s, emission_s=emission_s,
         clock_offsets_s=clock, noise_rms=noise_rms, level_at_10m=level, reflections=reflections, rng=rng,
+        detours_m=detours,
     )
     print(f"{os.path.basename(scenario_dir)}: {kind}, {M} recordings, c={c:.1f} m/s, source=({source[0]:.1f}, {source[1]:.1f}, {source[2]:.1f}) m")
     files = []
@@ -222,6 +237,8 @@ def generate_scenario(scenario_dir, fmt="wav", seed=0, noise_rms=0.003, clock_of
             out_name = stem + ".mp4"
         files.append(out_name)
         hnote = f"  height {XYZ[i, 2]:.1f} m" + (f" (prior {m.height_m:.1f} +- {m.height_sigma_m:.1f})" if m.height_sigma_m > 0 else "")
+        if detours[i] > 0:
+            hnote += f"  OCCLUDED, +{detours[i]:.0f} m detour"
         print(f"  {out_name:12s} d={truth['distances_m'][i]:6.1f} m  snr={truth['snr_db'][i]:5.1f} dB  clock={clock[i]*1000:+.1f} ms  arrival={truth['arrival_times_s'][i]:.6f} s{hnote}")
     lat_s, lon_s = le.local_xy_to_latlon(source[0], source[1], lat0, lon0)
     hp = J.get("event", {}).get("height_prior")

@@ -1,0 +1,78 @@
+{
+  "description": "Urban canyon - gunshot at street level, three of seven cameras behind buildings",
+  "temperature_C": 12.0,
+  "reference_point": {
+    "lat": 41.879,
+    "lon": -87.63,
+    "description": "Street corner"
+  },
+  "mics": [
+    {
+      "file": "cam1.mp4",
+      "lat": 41.879,
+      "lon": -87.63,
+      "height_m": 3.0,
+      "description": "Shop camera, street corner, clear view"
+    },
+    {
+      "file": "cam2.mp4",
+      "lat": 41.879045,
+      "lon": -87.6295784,
+      "height_m": 4.0,
+      "description": "Traffic camera, same street, clear view"
+    },
+    {
+      "file": "cam3.mp4",
+      "lat": 41.8793601,
+      "lon": -87.6297591,
+      "height_m": 3.0,
+      "description": "Behind the corner building: sound diffracts around it (+7 m)",
+      "occlusion_detour_m": 7.0
+    },
+    {
+      "file": "cam4.mp4",
+      "lat": 41.8792701,
+      "lon": -87.6301807,
+      "height_m": 2.5,
+      "description": "Doorway on the side street, partly shadowed (+4 m)",
+      "occlusion_detour_m": 4.0
+    },
+    {
+      "file": "cam5.mp4",
+      "lat": 41.8793151,
+      "lon": -87.6293976,
+      "height_m": 6.0,
+      "description": "Parking structure behind the block (+12 m)",
+      "occlusion_detour_m": 12.0
+    },
+    {
+      "file": "cam6.mp4",
+      "lat": 41.8787749,
+      "lon": -87.6298795,
+      "height_m": 3.0,
+      "description": "Across the avenue, clear view"
+    },
+    {
+      "file": "cam7.mp4",
+      "lat": 41.8788199,
+      "lon": -87.6295181,
+      "height_m": 8.0,
+      "description": "Second-floor balcony, clear view"
+    }
+  ],
+  "event": {
+    "type": "gunshot",
+    "true_location": {
+      "lat": 41.87909,
+      "lon": -87.6297832,
+      "height_m": 1.3,
+      "description": "Sidewalk, mid-block"
+    },
+    "height_prior": {
+      "mean_m": 1.5,
+      "sigma_m": 1.0,
+      "description": "Street level"
+    },
+    "time_utc": "2024-05-11T01:12:44.600Z"
+  }
+}

@@ -73,9 +73,13 @@ class TestNoiseAndUncertainty:
     def test_uncertainty_inflated_when_residuals_exceed_assumed_noise(self):
         XYZ, src = l_xyz(), np.array([12.0, 30.0])
         t = arrivals(src, XYZ, noise=1.0e-3, rng=np.random.default_rng(3))
-        sol = le.solve_tdoa(t, XYZ, C, sigma_t=np.full(len(XYZ), 0.1e-3))
+        sol = le.solve_tdoa(t, XYZ, C, sigma_t=np.full(len(XYZ), 0.1e-3), occlusion=False)
         assert sol.scale > 5.0
         assert le.mahalanobis_xy(sol, src) < 4.0
+        # With the occlusion model the assumed sigma is taken at face value: a 10x too small sigma
+        # makes noise look like detours. The result must then at least be flagged as thin.
+        sol2 = le.solve_tdoa(t, XYZ, C, sigma_t=np.full(len(XYZ), 0.1e-3))
+        assert le.mahalanobis_xy(sol2, src) < 4.0 or sol2.n_direct - 3 < 2
 
 
 class TestRobustness:
@@ -83,10 +87,13 @@ class TestRobustness:
         XYZ, src = l_xyz()[:5], np.array([12.0, 30.0])
         t = arrivals(src, XYZ)
         t[2] += 0.008
-        sol = le.solve_tdoa(t, XYZ, C)
+        sol = le.solve_tdoa(t, XYZ, C, occlusion=False)
         assert sol.rejected == [2] and sol.weights[2] == 0.0
         assert pos_error(sol, src) < 1e-4
         assert abs(sol.residuals_s[2] - 0.008) < 1e-6
+        # default (occlusion) mode: the late arrival is explained as a detour instead
+        sol2 = le.solve_tdoa(t, XYZ, C)
+        assert sol2.occluded == [2] and pos_error(sol2, src) < 1e-3
 
     def test_outlier_with_four_recordings_cannot_be_identified_but_is_flagged(self):
         # with 4 recordings (1 degree of freedom) a bad arrival is absorbed by moving the source;
@@ -94,7 +101,7 @@ class TestRobustness:
         XYZ, src = square_xyz(20.0), np.array([4.0, 7.0])
         t = arrivals(src, XYZ)
         t[1] += 0.006
-        sol = le.solve_tdoa(t, XYZ, C)
+        sol = le.solve_tdoa(t, XYZ, C, occlusion=False)
         assert sol.rejected == []  # cannot drop below 4 recordings
         assert sol.scale > 4.0
         assert le.mahalanobis_xy(sol, src) < 4.0
@@ -103,9 +110,9 @@ class TestRobustness:
         XYZ, src = l_xyz()[:5], np.array([12.0, 30.0])
         t = arrivals(src, XYZ)
         t[2] += 0.008
-        sol = le.solve_tdoa(t, XYZ, C, reject_k=0.0)
+        sol = le.solve_tdoa(t, XYZ, C, reject_k=0.0, occlusion=False)
         assert sol.rejected == [] and sol.scale > 4.0
-        assert pos_error(sol, src) > pos_error(le.solve_tdoa(t, XYZ, C), src)
+        assert pos_error(sol, src) > pos_error(le.solve_tdoa(t, XYZ, C, occlusion=False), src)
 
     def test_leverage_outlier_on_l_array(self):
         # the classic failure of plain M-estimators: one bad arrival, everything else perfect
@@ -113,16 +120,18 @@ class TestRobustness:
         for bad in range(6):
             t = arrivals(src, XYZ)
             t[bad] += 0.006
-            sol = le.solve_tdoa(t, XYZ, C)
+            sol = le.solve_tdoa(t, XYZ, C, occlusion=False)
             assert sol.rejected == [bad], (bad, sol.rejected, sol.residuals_s)
             assert pos_error(sol, src) < 1e-4
+            sol2 = le.solve_tdoa(t, XYZ, C)  # occlusion mode: same position, arrival explained as a detour
+            assert sol2.occluded == [bad] and pos_error(sol2, src) < 1e-3
 
     def test_no_false_rejection_on_noisy_data(self):
         XYZ, src = l_xyz(), np.array([12.0, 30.0])
         n_rej = 0
         for seed in range(30):
             t = arrivals(src, XYZ, noise=0.3e-3, rng=np.random.default_rng(seed))
-            sol = le.solve_tdoa(t, XYZ, C, sigma_t=np.full(6, 0.3e-3))
+            sol = le.solve_tdoa(t, XYZ, C, sigma_t=np.full(6, 0.3e-3), occlusion=False)
             n_rej += len(sol.rejected)
         assert n_rej <= 1
 
@@ -143,8 +152,12 @@ class TestClockPrior:
         XYZ, src = l_xyz(), np.array([12.0, 30.0])
         offs = np.array([0.0, 0.002, -0.001, 0.0015, -0.0005, 0.001])
         t = arrivals(src, XYZ, offsets=offs)
-        sol = le.solve_tdoa(t, XYZ, C, sigma_t=np.full(6, 0.2e-3))
+        sol = le.solve_tdoa(t, XYZ, C, sigma_t=np.full(6, 0.2e-3), occlusion=False)
         assert sol.scale > 4.0 and le.mahalanobis_xy(sol, src) < 3.5
+        # the designed path for unsynchronized devices is the clock prior, which stays honest with
+        # the occlusion model on
+        sol2 = le.solve_tdoa(t, XYZ, C, sigma_t=np.full(6, 0.2e-3), clock_sigma=0.002)
+        assert le.mahalanobis_xy(sol2, src) < 3.5
 
     def test_prior_zero_means_synchronized(self):
         XYZ, src = square_xyz(20.0), np.array([4.0, 7.0])

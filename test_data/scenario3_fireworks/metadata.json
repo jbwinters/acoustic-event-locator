@@ -140,6 +140,14 @@
       ]
     ]
   ],
+  "occlusion_detour_m": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ],
   "files": [
     "cam1.wav",
     "cam2.wav",

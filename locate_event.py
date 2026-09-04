@@ -67,7 +67,7 @@ import os
 import shutil
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -568,10 +568,12 @@ def refine_arrivals_pairwise(
 # ------------------------------ Event association ------------------------------
 
 
-def max_pairwise_lag(XYZ: np.ndarray, c: float, slack_s: float = 0.005, clock_sigma_s: float = 0.0):
-    """Matrix of the largest physically possible |t_i - t_j| for each pair."""
+def max_pairwise_lag(XYZ: np.ndarray, c: float, slack_s: float = 0.005, clock_sigma_s: float = 0.0, max_detour_s: float = 0.0):
+    """Matrix of the largest physically possible |t_i - t_j| for each pair. max_detour_s widens
+    the gate so that an arrival delayed by an obstacle (up to that extra path time) still
+    associates with the event; the solver then decides whether it was occluded."""
     D = np.linalg.norm(XYZ[:, None, :] - XYZ[None, :, :], axis=-1)
-    return D / c + slack_s + 3.0 * clock_sigma_s
+    return D / c + slack_s + 3.0 * clock_sigma_s + max_detour_s
 
 
 def associate_onsets(
@@ -760,10 +762,22 @@ class TDOASolution:
     cov_pos: Optional[np.ndarray] = None
     mic_heights: Optional[np.ndarray] = None
     mic_height_std: Optional[np.ndarray] = None
+    occluded: List[int] = field(default_factory=list)
+    occlusion_prob: Optional[np.ndarray] = None
+    detour_m: Optional[np.ndarray] = None
+    loss: str = "huber"
+    sigma_eff: Optional[np.ndarray] = None
+    n_direct: int = 0
 
     @property
     def rmse_s(self) -> float:
-        return float(np.sqrt(np.mean(self.residuals_s**2))) if len(self.residuals_s) else float("nan")
+        """RMS residual of the recordings that carry weight (direct-path arrivals)."""
+        if not len(self.residuals_s):
+            return float("nan")
+        w = self.weights if self.weights is not None else np.ones(len(self.residuals_s))
+        sel = w >= 0.5
+        r = self.residuals_s[sel] if sel.any() else self.residuals_s
+        return float(np.sqrt(np.mean(r**2)))
 
 
 def _huber_irls_weights(raw: np.ndarray, k: float) -> np.ndarray:
@@ -774,20 +788,110 @@ def _huber_irls_weights(raw: np.ndarray, k: float) -> np.ndarray:
     return w
 
 
-def _huber_cost(r_data: np.ndarray, k_norm: np.ndarray, r_prior: np.ndarray) -> float:
-    u = np.abs(r_data)
-    rho = np.where(u <= k_norm, 0.5 * u * u, k_norm * u - 0.5 * k_norm * k_norm)
-    return float(np.sum(rho) + 0.5 * np.sum(r_prior * r_prior))
+class _HuberLoss:
+    """Symmetric Huber loss on raw residuals with threshold k (seconds)."""
+
+    name = "huber"
+
+    def __init__(self, k: float):
+        self.k = float(k)
+
+    def weights(self, raw, sigma):
+        return _huber_irls_weights(raw, self.k)
+
+    def cost(self, raw, sigma):
+        u = np.abs(raw) / sigma
+        kn = self.k / sigma
+        rho = np.where(u <= kn, 0.5 * u * u, kn * u - 0.5 * kn * kn)
+        return float(np.sum(rho))
+
+    def occlusion_prob(self, raw, sigma):
+        return np.zeros_like(np.asarray(raw, dtype=float))
 
 
-def _lm_refine(theta0, t, XYZ, c, sigma_t, layout, priors, huber_k, box=None, max_iter=200, trace=None):
-    """Levenberg-Marquardt with Huber IRLS weights over the parameters described by `layout`.
+class _OcclusionLoss:
+    """Negative log-likelihood of a three-component residual model:
+      direct   (prob 1 - p - q): r ~ N(0, sigma^2)
+      occluded (prob p):         r = extra path / c + noise, extra path ~ Exponential(mean tau * c),
+                                 i.e. an exponentially modified Gaussian; only positive residuals
+      blunder  (prob q):         r ~ Uniform(-U, U), a mis-pick of either sign
+    Large positive residuals cost ~r/tau and pull almost nothing; residuals that are impossible
+    for a direct or delayed arrival (large negative) become blunders with ~zero weight instead
+    of dragging the solution. Weights are exact IRLS weights psi(r)/r of this loss."""
+
+    name = "occlusion"
+
+    def __init__(self, p: float, tau: float, q: float = 0.05, blunder_window: float = 0.5):
+        self.p = float(p)
+        self.q = float(q)
+        self.tau = float(tau)
+        self.U = float(blunder_window)
+        if not (self.p > 0 and self.q >= 0 and self.p + self.q < 1):
+            raise LocatorError("occlusion_prob and blunder_prob must be positive and sum to less than 1")
+
+    def _log_components(self, r, sigma):
+        from scipy.special import log_ndtr
+
+        log_n = math.log(1 - self.p - self.q) - 0.5 * (r / sigma) ** 2 - np.log(sigma * math.sqrt(2 * math.pi))
+        z = sigma / self.tau - r / sigma
+        log_e = math.log(self.p) - math.log(self.tau) + 0.5 * (sigma / self.tau) ** 2 - r / self.tau + log_ndtr(-z)
+        log_u = np.full_like(r, math.log(self.q / (2 * self.U)) if self.q > 0 else -np.inf)
+        return log_n, log_e, log_u, z
+
+    def responsibilities(self, raw, sigma):
+        """(gamma_direct, gamma_occluded, gamma_blunder) per residual."""
+        r = np.asarray(raw, dtype=float)
+        sigma = np.asarray(sigma, dtype=float)
+        ln, le_, lu, _ = self._log_components(r, sigma)
+        m = np.maximum(np.maximum(ln, le_), lu)
+        en, ee, eu = np.exp(ln - m), np.exp(le_ - m), np.exp(lu - m)
+        s = en + ee + eu
+        return en / s, ee / s, eu / s
+
+    def occlusion_prob(self, raw, sigma):
+        return self.responsibilities(raw, sigma)[1]
+
+    def blunder_prob(self, raw, sigma):
+        return self.responsibilities(raw, sigma)[2]
+
+    def cost(self, raw, sigma):
+        r = np.asarray(raw, dtype=float)
+        sigma = np.asarray(sigma, dtype=float)
+        ln, le_, lu, _ = self._log_components(r, sigma)
+        m = np.maximum(np.maximum(ln, le_), lu)
+        return float(-np.sum(m + np.log(np.exp(ln - m) + np.exp(le_ - m) + np.exp(lu - m))))
+
+    def psi(self, raw, sigma):
+        from scipy.special import log_ndtr
+
+        r = np.asarray(raw, dtype=float)
+        sigma = np.asarray(sigma, dtype=float)
+        gn, ge, _ = self.responsibilities(r, sigma)
+        z = sigma / self.tau - r / sigma
+        log_phi = -0.5 * z * z - 0.5 * math.log(2 * math.pi)
+        mills = np.exp(log_phi - log_ndtr(-z))  # phi(-z) / Phi(-z)
+        return gn * r / sigma**2 + ge * (1.0 / self.tau - mills / sigma)
+
+    def weights(self, raw, sigma):
+        """IRLS weights psi(r)/r relative to the Gaussian weight 1/sigma^2. Within half a sigma
+        of zero the loss is quadratic to a very good approximation and psi/r is ill-conditioned
+        (the mixture's minimum sits a few microseconds right of zero), so unit weight is used."""
+        r = np.asarray(raw, dtype=float)
+        sigma = np.asarray(sigma, dtype=float)
+        psi = self.psi(r, sigma)
+        small = np.abs(r) < 0.5 * sigma
+        with np.errstate(divide="ignore", invalid="ignore"):
+            w = np.where(small, 1.0, psi / np.where(small, 1.0, r) * sigma**2)
+        return np.clip(np.nan_to_num(w, nan=0.0), 0.0, 1.0)
+
+
+def _lm_refine(theta0, t, XYZ, c, sigma_t, layout, priors, loss, box=None, max_iter=200, trace=None):
+    """Levenberg-Marquardt with IRLS weights from `loss` over the parameters in `layout`.
 
     priors: dict with z0, z_sigma, clock_sigma, height_mu (M,), height_sigma (M,).
     box: (xmin, xmax, ymin, ymax, zmin, zmax); steps leaving it are rejected.
     trace: optional list that receives theta after each accepted step."""
     M = len(t)
-    k_norm = huber_k / sigma_t
     z0, z_sigma = priors["z0"], priors["z_sigma"]
     clock_sigma = priors["clock_sigma"]
     height_mu, height_sigma = priors["height_mu"], priors["height_sigma"]
@@ -831,6 +935,9 @@ def _lm_refine(theta0, t, XYZ, c, sigma_t, layout, priors, huber_k, box=None, ma
                 row += 1
         return raw, np.concatenate([r, rp]), np.vstack([J, Jp])
 
+    def total_cost(raw, r):
+        return loss.cost(raw, sigma_t) + 0.5 * float(np.sum(r[M:] ** 2))
+
     def inside(th):
         if box is None:
             return True
@@ -840,14 +947,14 @@ def _lm_refine(theta0, t, XYZ, c, sigma_t, layout, priors, huber_k, box=None, ma
 
     theta = np.array(theta0, dtype=float)
     raw, r, J = evaluate(theta)
-    cost = _huber_cost(r[:M], k_norm, r[M:])
+    cost = total_cost(raw, r)
     if trace is not None:
         trace.append(theta.copy())
     lam = 1e-3
     converged = False
     it = 0
     for it in range(1, max_iter + 1):
-        hw = _huber_irls_weights(raw, huber_k)
+        hw = loss.weights(raw, sigma_t)
         sw = np.sqrt(np.concatenate([hw, np.ones(len(r) - M)]))
         Jw = J * sw[:, None]
         JTJ = Jw.T @ Jw
@@ -867,7 +974,7 @@ def _lm_refine(theta0, t, XYZ, c, sigma_t, layout, priors, huber_k, box=None, ma
                     break
                 continue
             raw_new, r_new, J_new = evaluate(th_new)
-            cost_new = _huber_cost(r_new[:M], k_norm, r_new[M:])
+            cost_new = total_cost(raw_new, r_new)
             if cost_new <= cost:
                 accepted = True
                 break
@@ -877,7 +984,7 @@ def _lm_refine(theta0, t, XYZ, c, sigma_t, layout, priors, huber_k, box=None, ma
         if not accepted:
             converged = True
             break
-        rel = (cost - cost_new) / max(cost, 1e-300)
+        rel = (cost - cost_new) / max(abs(cost), 1e-300)
         moved = float(np.linalg.norm(step[: layout.n_pos]))
         theta, raw, r, J, cost = th_new, raw_new, r_new, J_new, cost_new
         if trace is not None:
@@ -889,7 +996,7 @@ def _lm_refine(theta0, t, XYZ, c, sigma_t, layout, priors, huber_k, box=None, ma
     return theta, raw, r, J, cost, converged, it
 
 
-def _fit_all_starts(t, XYZ, c, sigma_t, layout, priors, huber_k, search_radius, grid_res, init, n_starts, trace=None):
+def _fit_all_starts(t, XYZ, c, sigma_t, layout, priors, loss, search_radius, grid_res, init, n_starts, trace=None):
     M = len(t)
     w = 1.0 / sigma_t**2
     z0, z_sigma = priors["z0"], priors["z_sigma"]
@@ -920,9 +1027,48 @@ def _fit_all_starts(t, XYZ, c, sigma_t, layout, priors, huber_k, search_radius, 
     for k, (xy, zl, _) in enumerate(starts):
         theta0 = layout.pack(xy, zl, profile_t0(np.array([xy[0], xy[1], zl]), t, XYZ, c, w), None, priors["height_mu"])
         tr = trace if (trace is not None and k == 0) else None
-        sols.append(_lm_refine(theta0, t, XYZ, c, sigma_t, layout, priors, huber_k, box=box, trace=tr))
+        sols.append(_lm_refine(theta0, t, XYZ, c, sigma_t, layout, priors, loss, box=box, trace=tr))
     sols.sort(key=lambda z: z[4])
     return sols, box
+
+
+def _subset_search(t, XYZ, c, sigma_t, z0, loss, huber, search_radius, m0=None, max_subsets=300, n_keep=6, seed=0):
+    """Fit the core model (x, y, t0 at height z0) to every m0-recording subset and score each
+    solution by the mixture likelihood of ALL residuals. Returns up to n_keep hypotheses
+    [(theta_core [x, y, t0], cost), ...] sorted by cost and distinct in position, so that
+    competing explanations (which recordings are direct) surface as alternatives."""
+    from itertools import combinations
+
+    M = len(t)
+    if M < 4:
+        return []
+    sizes = [m0] if m0 is not None else ([4, 3] if M <= 8 else [4])  # 3-subsets: exact fits, catch a 3-recording direct set
+    combos = [c_ for m in sizes if M > m for c_ in combinations(range(M), m)]
+    if len(combos) > max_subsets:
+        rng = np.random.default_rng(seed)
+        combos = [combos[i] for i in rng.choice(len(combos), max_subsets, replace=False)]
+    span = float(max(np.ptp(XYZ[:, 0]), np.ptp(XYZ[:, 1]), 1.0))
+    R = float(search_radius) if search_radius is not None else max(200.0, 3.0 * span)
+    coarse = max(0.5, (2 * R + span) / 120.0)
+    hyps = []
+    for sub in combos:
+        sub = np.asarray(sub)
+        m = len(sub)
+        lay = _Layout(m, False, False, np.zeros(m))
+        pri = {"z0": z0, "z_sigma": 1.0, "z_bounds": (z0 - 1.0, z0 + 1.0), "clock_sigma": 0.0,
+               "height_mu": XYZ[sub, 2], "height_sigma": np.zeros(m)}
+        sols, _ = _fit_all_starts(t[sub], XYZ[sub], c, sigma_t[sub], lay, pri, huber, R, coarse, None, 4)
+        for th, *_ in sols[:2]:  # best two starts per subset (mirror geometries)
+            pred, _ = predict_arrivals(np.array([th[0], th[1], z0]), XYZ, c, z0, th[2])
+            hyps.append((th.copy(), loss.cost(t - pred, sigma_t)))
+    hyps.sort(key=lambda h: h[1])
+    keep = []
+    for th, cst in hyps:
+        if all(np.linalg.norm(th[:2] - k[0][:2]) > max(1.0, 0.02 * span) for k in keep):
+            keep.append((th, cst))
+        if len(keep) >= n_keep:
+            break
+    return keep
 
 
 def _mahalanobis(p, q, C):
@@ -945,6 +1091,10 @@ def solve_tdoa(
     clock_sigma: float = 0.0,
     huber_k: float = 0.002,
     reject_k: Optional[float] = None,
+    occlusion: bool = True,
+    occlusion_prob: float = 0.2,
+    occlusion_scale_m: float = 5.0,
+    blunder_prob: float = 0.05,
     search_radius: Optional[float] = None,
     grid_res: Optional[float] = None,
     init: Optional[Sequence[float]] = None,
@@ -963,11 +1113,18 @@ def solve_tdoa(
     height_sigma    per-recording prior std of the height (m); 0 = known. Recordings with
                     height_sigma > 0 get their height estimated jointly with a prior at XYZ[i, 2]
     clock_sigma     prior std of per-recording clock offsets (s); 0 = synchronized (offsets fixed)
-    huber_k         residual magnitude (s) beyond which observations are down-weighted
+    huber_k         residual magnitude (s) beyond which observations are down-weighted (and,
+                    with occlusion on, below which negative residuals stop being Gaussian)
     reject_k        residual magnitude (s) beyond which an observation is dropped and the fit
                     repeated, as long as at least 4 recordings remain (default 3 * huber_k;
-                    0 disables). A leave-one-out check additionally catches a single bad
-                    arrival that the fit would otherwise absorb by shifting the source.
+                    0 disables). With occlusion on only early (negative) residuals are dropped,
+                    late ones are explained as detours instead.
+    occlusion       model late arrivals as detours: mixture loss in which an arrival is direct,
+                    delayed by an exponential extra path of mean occlusion_scale_m (probability
+                    occlusion_prob), or a mis-pick of either sign (probability blunder_prob);
+                    plus a search over 4-recording subsets (3 with only 4 recordings) for the
+                    set of direct-path recordings, whose runner-up explanations are reported as
+                    alternatives. Off = symmetric Huber plus rejection and leave-one-out.
     search_radius   grid search extends this far beyond the array bounding box (default
                     max(200 m, 3 x array extent)); grid_res defaults to ~400 steps across it
     trace           optional list receiving the parameter vector after each accepted
@@ -994,6 +1151,8 @@ def solve_tdoa(
         raise LocatorError("height_sigma must be non-negative and have one entry per recording")
     if source_z_sigma < 0:
         raise LocatorError("source_z_sigma must be >= 0")
+    if not (0.0 < occlusion_prob < 1.0) or occlusion_scale_m <= 0 or not (0.0 <= blunder_prob < 1.0):
+        raise LocatorError("occlusion_prob must be in (0, 1), occlusion_scale_m > 0, blunder_prob in [0, 1)")
     zmin, zmax = float(source_z_bounds[0]), float(source_z_bounds[1])
     if not zmin < zmax:
         raise LocatorError("source_z_bounds must be (min, max) with min < max")
@@ -1002,6 +1161,8 @@ def solve_tdoa(
         raise LocatorError("source_z (prior mean) must lie within source_z_bounds")
     estimate_offsets = clock_sigma > 0
     reject_k = 3.0 * huber_k if reject_k is None else float(reject_k)
+    huber = _HuberLoss(huber_k)
+    loss = _OcclusionLoss(occlusion_prob, occlusion_scale_m / c, blunder_prob) if occlusion else huber
     priors_full = {
         "z0": float(source_z), "z_sigma": float(source_z_sigma) if solve_z else 1.0, "z_bounds": (zmin, zmax),
         "clock_sigma": float(clock_sigma), "height_mu": XYZ[:, 2].copy(), "height_sigma": height_sigma,
@@ -1010,18 +1171,48 @@ def solve_tdoa(
     def fit(idx, tr=None):
         lay = _Layout(len(idx), solve_z, estimate_offsets, height_sigma[idx])
         pri = dict(priors_full, height_mu=XYZ[idx, 2], height_sigma=height_sigma[idx])
-        sols, box = _fit_all_starts(t[idx], XYZ[idx], c, sigma_t[idx], lay, pri, huber_k,
+        sols, box = _fit_all_starts(t[idx], XYZ[idx], c, sigma_t[idx], lay, pri, huber,
                                     search_radius, grid_res, init, n_starts, trace=tr)
+        if occlusion:
+            sig = sigma_t[idx]
+            # candidate starts: every Huber-stage minimum plus the subset-search hypotheses;
+            # all are refined under the mixture loss so their costs are comparable
+            cands = [s[0] for s in sols]
+            for th_core, _ in _subset_search(t[idx], XYZ[idx], c, sig, priors_full["z0"], loss, huber, search_radius):
+                cands.append(lay.pack(th_core[:2], priors_full["z0"], th_core[2], None, pri["height_mu"]))
+            refined = [_lm_refine(th0, t[idx], XYZ[idx], c, sig, lay, pri, loss, box=box) for th0 in cands]
+            refined.sort(key=lambda z: z[4])
+            sols = refined
         return sols, box, lay, pri
 
     active = np.ones(M, dtype=bool)
     rejected: List[int] = []
+    sigma_assumed = sigma_t.copy()
+    polished = None
     while True:
         idx = np.flatnonzero(active)
         if trace is not None:
             trace.clear()
         sols, box, layout, priors = fit(idx, trace)
         theta, raw, r, J, cost, converged, iters = sols[0]
+        if occlusion:
+            # Final polish: the mixture decides which recordings are direct; the position itself is
+            # then re-fitted on that set alone, so the exponential detour prior exerts no residual
+            # pull on the estimate (the pull is ~1/tau per late recording and biases by centimetres).
+            gd, go, gb = loss.responsibilities(raw, sigma_t[idx])
+            direct = gd > 0.5
+            if direct.sum() >= 3 and (~direct).any():
+                sub = idx[direct]
+                lay_d = _Layout(len(sub), solve_z, estimate_offsets, height_sigma[sub])
+                pri_d = dict(priors_full, height_mu=XYZ[sub, 2], height_sigma=height_sigma[sub])
+                # start from the mixture solution restricted to the direct set
+                s0, t00, d0, XYZc0 = layout.unpack(theta, XYZ[idx], priors_full["z0"])
+                th0 = lay_d.pack(s0[:2], s0[2], t00, d0[direct] if estimate_offsets else None, XYZc0[direct, 2])
+                th_d, raw_d, r_d, J_d, cost_d, conv_d, it_d = _lm_refine(th0, t[sub], XYZ[sub], c, sigma_t[sub], lay_d, pri_d, huber, box=box)
+                polished = (th_d, raw_d, r_d, J_d, cost_d, conv_d, it_d, sub, lay_d)
+            else:
+                polished = None
+            break  # with the mixture loss, blunders get ~zero weight instead of being dropped
         if reject_k <= 0 or len(idx) - 1 < 4:
             break
         worst = int(np.argmax(np.abs(raw)))
@@ -1034,7 +1225,7 @@ def solve_tdoa(
         # leave-one-out: if dropping one recording removes most of the misfit and that recording
         # then disagrees with the rest by more than 1.5 * huber_k, drop it.
         dof_full = len(r) - len(theta)
-        chi2_full = float(np.sum(_huber_irls_weights(raw, huber_k) * r[: len(idx)] ** 2))
+        chi2_full = float(np.sum(huber.weights(raw, sigma_t[idx]) * r[: len(idx)] ** 2))
         if dof_full <= 0 or chi2_full / dof_full < 2.0:
             break
         best_i, best_cost, best_pred = None, cost, None
@@ -1051,18 +1242,25 @@ def solve_tdoa(
             rejected.append(int(best_i))
             continue
         break
+    classify_raw, classify_sigma = raw.copy(), sigma_t[idx].copy()
+    if occlusion and polished is not None:
+        theta, raw, r, J, cost, converged, iters, idx, layout = polished
+        priors = dict(priors_full, height_mu=XYZ[idx, 2], height_sigma=height_sigma[idx])
     Ma = len(idx)
 
-    hw = _huber_irls_weights(raw, huber_k)
+    hw = huber.weights(raw, sigma_t[idx]) if (occlusion and polished is not None) else loss.weights(raw, sigma_t[idx])
     wfull = np.concatenate([hw, np.ones(len(r) - Ma)])
     F = (J * wfull[:, None]).T @ J
     cond = float(np.linalg.cond(F)) if np.all(np.isfinite(F)) else float("inf")
     degenerate = not np.isfinite(cond) or cond > 1e12
     cov = np.linalg.pinv(F) if degenerate else np.linalg.inv(F)
     dof = int(len(r) - len(theta))
+    dof_eff = float(np.sum(hw)) + (len(r) - Ma) - len(theta)  # occluded recordings carry ~no weight
     chi2 = float(np.sum(hw * r[:Ma] ** 2))
-    scale = max(1.0, chi2 / dof) if dof > 0 else 1.0
-    cov = cov * scale
+    inflation = max(1.0, chi2 / dof_eff) if dof_eff > 0.5 else 1.0
+    cov = cov * inflation
+    # total uncertainty scale relative to what the caller assumed (sigma widening x chi-square)
+    scale = inflation * float(np.median(sigma_t / sigma_assumed)) ** 2
     n_pos = layout.n_pos
     cov_pos = cov[:n_pos, :n_pos].copy()
     cov_xy = cov[:2, :2].copy()
@@ -1083,23 +1281,39 @@ def solve_tdoa(
     raw_full = t - pred_full
     w_full = np.zeros(M)
     w_full[idx] = hw
+    gamma_full = np.zeros(M)
+    if occlusion:
+        # classify every active recording at the final solution
+        act = np.flatnonzero(active)
+        _, go_all, gb_all = loss.responsibilities(raw_full[act], sigma_t[act])
+        gamma_full[act] = go_all
+        occluded = [int(i) for i in act[go_all > 0.5]]
+        rejected = [int(i) for i in act[gb_all > 0.5]]  # mis-picks: ~zero weight either side
+    else:
+        occluded = []
+    detour_full = np.where(gamma_full > 0.5, np.maximum(raw_full, 0.0) * c, 0.0)
     z_std = float(math.sqrt(max(cov[layout.i_z, layout.i_z], 0.0))) if solve_z else 0.0
+
+    def cost_at(th):
+        s_, t0_, d_, XYZc_ = layout.unpack(th, XYZ[idx], priors_full["z0"])
+        pred_, _ = predict_arrivals(s_, XYZc_, c, s_[2], t0_, d_)
+        return loss.cost(t[idx] - pred_, sigma_t[idx])
 
     alternatives = []
     thr = math.sqrt(7.815 if solve_z else 5.991)
     pos_of = lambda th: th[:n_pos]  # noqa: E731
     best_pos = pos_of(theta)
-    for th, _, _, _, cst, _, _ in sols[1:]:
+    for th, _, _, _, _, _, _ in sols[1:]:
         p = pos_of(th)
         if _mahalanobis(p, best_pos, cov_pos) <= thr:
             continue
         if any(_mahalanobis(p, [a["x"], a["y"]] + ([a["z"]] if solve_z else []), cov_pos) <= thr for a in alternatives):
             continue
-        dc = float((cst - cost) / scale)
+        dc = float((cost_at(th) - cost) / scale)
         if dc > 50.0:
             continue
         alt = {"x": float(th[0]), "y": float(th[1]), "z": float(th[layout.i_z]) if solve_z else float(source_z),
-               "cost": float(cst), "delta_cost": dc, "distance_m": float(np.linalg.norm(p - best_pos))}
+               "cost": float(cost_at(th)), "delta_cost": dc, "distance_m": float(np.linalg.norm(p - best_pos))}
         alternatives.append(alt)
     ambiguous = any(a["delta_cost"] <= 3.0 for a in alternatives)
     margin = 0.02 * max(box[1] - box[0], box[3] - box[2])
@@ -1110,12 +1324,14 @@ def solve_tdoa(
 
     return TDOASolution(
         s_xy=s_xy, t0=float(t0), delta=delta_full, cov=cov, cov_xy=cov_xy, residuals_s=raw_full,
-        weights=w_full, sigma_t=sigma_t, chi2=chi2, dof=dof, scale=float(scale), cost=float(cost),
+        weights=w_full, sigma_t=sigma_assumed, chi2=chi2, dof=dof, scale=float(scale), cost=float(cost),
         converged=bool(converged), iterations=int(iters), alternatives=alternatives,
         condition_number=cond, degenerate=bool(degenerate), estimate_offsets=bool(estimate_offsets),
         ambiguous=bool(ambiguous), rejected=rejected, at_boundary=at_boundary,
         s_xyz=s_xyz.copy(), z_std=z_std, solve_z=bool(solve_z), z_at_bound=z_at_bound, cov_pos=cov_pos,
         mic_heights=heights_full, mic_height_std=height_std_full,
+        occluded=occluded, occlusion_prob=gamma_full, detour_m=detour_full, loss=loss.name,
+        sigma_eff=sigma_t.copy(), n_direct=int(np.sum(w_full >= 0.5)),
     )
 
 
@@ -1159,6 +1375,11 @@ class PipelineParams:
     source_z_sigma: float = 0.0
     source_z_bounds: Tuple[float, float] = (0.0, 5000.0)
     huber_k_s: float = 0.002
+    occlusion: bool = True
+    occlusion_prob: float = 0.2
+    occlusion_scale_m: float = 5.0
+    blunder_prob: float = 0.05
+    max_detour_m: float = 30.0
     timing_sigma_s: float = 0.5e-3
     gcc_weighting: str = "phat"
     refine: bool = True
@@ -1180,6 +1401,8 @@ class TrackResult:
     clock_offset_s: Optional[float] = None
     height_m: Optional[float] = None
     height_std_m: Optional[float] = None
+    occlusion_prob: Optional[float] = None
+    detour_m: Optional[float] = None
     note: str = ""
 
 
@@ -1229,7 +1452,7 @@ def locate_from_signals(
             tracks[i].note = f"no onset exceeds {min_ratio:g}x the noise floor"
         log(f"track {i}: {len(ci)} onset candidate(s)" + (f", strongest {ci[0][1]:.1f}x at {ci[0][0]/fs:.3f}s" if ci else ""), "DEBUG")
 
-    max_lag = max_pairwise_lag(XYZ, c, p.slack_s, p.clock_sigma_s)
+    max_lag = max_pairwise_lag(XYZ, c, p.slack_s, p.clock_sigma_s, (p.max_detour_m / c) if p.occlusion else 0.0)
     chosen, missing = associate_onsets(cands, fs, max_lag)
     for i in missing:
         if cands[i]:
@@ -1276,7 +1499,9 @@ def locate_from_signals(
     sol = solve_tdoa(
         arrivals, XYZ[used], c, sigma_t=sigma_t, source_z=p.source_z, source_z_sigma=p.source_z_sigma,
         source_z_bounds=p.source_z_bounds, height_sigma=height_sigma[used], clock_sigma=p.clock_sigma_s,
-        huber_k=p.huber_k_s, search_radius=p.search_radius_m, grid_res=p.grid_res_m,
+        huber_k=p.huber_k_s, occlusion=p.occlusion, occlusion_prob=p.occlusion_prob,
+        occlusion_scale_m=p.occlusion_scale_m, blunder_prob=p.blunder_prob,
+        search_radius=p.search_radius_m, grid_res=p.grid_res_m,
     )
     relaxed = min_ratio < p.min_snr
     if relaxed and sol.dof > 0 and sol.chi2 / sol.dof > 25.0:
@@ -1294,12 +1519,28 @@ def locate_from_signals(
         tr.clock_offset_s = float(sol.delta[k])
         tr.height_m = float(sol.mic_heights[k])
         tr.height_std_m = float(sol.mic_height_std[k])
-        if k in sol.rejected:
-            tr.note = f"rejected as outlier (residual {sol.residuals_s[k]*1000:.2f} ms)"
+        tr.occlusion_prob = float(sol.occlusion_prob[k])
+        tr.detour_m = float(sol.detour_m[k])
+        if k in sol.occluded:
+            tr.note = (f"arrived {sol.residuals_s[k]*1000:.1f} ms late: treated as occluded "
+                       f"(about {sol.detour_m[k]:.1f} m of extra path)")
+        elif k in sol.rejected:
+            tr.note = f"treated as a mis-pick (residual {sol.residuals_s[k]*1000:.2f} ms, weight {sol.weights[k]:.2f})"
         elif sol.weights[k] < 0.5:
             tr.note = f"down-weighted outlier (residual {sol.residuals_s[k]*1000:.2f} ms)"
     for k in sol.rejected:
-        warnings_out.append(f"recording {used[k]}: arrival rejected as an outlier (residual {sol.residuals_s[k]*1000:.2f} ms)")
+        warnings_out.append(f"recording {used[k]}: arrival treated as a mis-pick (residual {sol.residuals_s[k]*1000:.2f} ms)")
+    if sol.occluded:
+        det = ", ".join(f"{used[k]}: {sol.detour_m[k]:.1f} m" for k in sol.occluded)
+        warnings_out.append(f"{len(sol.occluded)} recording(s) arrived late and were treated as occluded (detour {det}); "
+                            "the position rests on the direct-path recordings")
+    n_par = 3 + (1 if sol.solve_z else 0)
+    if (sol.occluded or sol.rejected) and sol.n_direct - n_par < 2:
+        warnings_out.append(
+            f"only {sol.n_direct} recordings carry the solution after {len(sol.occluded)} occluded and "
+            f"{len(sol.rejected)} mis-pick classification(s): little redundancy, so which recordings are direct may "
+            "be ambiguous (check alternatives) and the ellipse assumes --timing_sigma_ms is realistic"
+        )
     if sol.dof <= 0:
         warnings_out.append(
             "no redundancy (as many unknowns as observations): the fit cannot be cross-checked"
@@ -1432,6 +1673,8 @@ def build_results(res: dict, files, XYZ, lat0, lon0, c, p: PipelineParams, fs: i
             "weight": tr.weight,
             "height_m": tr.height_m,
             "height_std_m": tr.height_std_m,
+            "occlusion_probability": tr.occlusion_prob,
+            "detour_m": tr.detour_m,
             "note": tr.note,
         })
     refinement = None
@@ -1476,6 +1719,9 @@ def build_results(res: dict, files, XYZ, lat0, lon0, c, p: PipelineParams, fs: i
             "uncertainty_scale": sol.scale,
             "rmse_ms": sol.rmse_s * 1000,
             "rejected": [os.path.basename(files[res["used"][k]]) for k in sol.rejected],
+            "occluded": [os.path.basename(files[res["used"][k]]) for k in sol.occluded],
+            "direct_path_recordings": sol.n_direct,
+            "loss": sol.loss,
             "converged": sol.converged,
             "iterations": sol.iterations,
             "condition_number": sol.condition_number,
@@ -1492,6 +1738,8 @@ def build_results(res: dict, files, XYZ, lat0, lon0, c, p: PipelineParams, fs: i
             "fs": fs, "bandpass_hz": list(p.band), "env_ms": p.env_ms, "min_snr": p.min_snr, "merge_gap_s": p.merge_gap_s,
             "slack_ms": p.slack_s * 1000, "source_height_m": p.source_z, "source_height_sigma_m": p.source_z_sigma,
             "source_height_bounds_m": list(p.source_z_bounds), "huber_k_ms": p.huber_k_s * 1000,
+            "occlusion": p.occlusion, "occlusion_prob": p.occlusion_prob, "occlusion_scale_m": p.occlusion_scale_m,
+            "blunder_prob": p.blunder_prob, "max_detour_m": p.max_detour_m,
             "timing_sigma_ms": p.timing_sigma_s * 1000, "gcc_weighting": p.gcc_weighting, "refine": p.refine,
             "search_radius_m": p.search_radius_m, "grid_res_m": p.grid_res_m,
         },
@@ -1518,6 +1766,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--source_height_bounds", type=float, nargs=2, default=(0.0, 5000.0), metavar=("MIN", "MAX"), help="Allowed event height range when solving it.")
     ap.add_argument("--timing_sigma_ms", type=float, default=0.5, help="Assumed arrival-time noise for the strongest recording.")
     ap.add_argument("--huber_k_ms", type=float, default=2.0, help="Residuals beyond this are down-weighted (robustness).")
+    ap.add_argument("--no_occlusion", action="store_true", help="Disable the occlusion model (symmetric robust loss instead).")
+    ap.add_argument("--occlusion_prob", type=float, default=0.2, help="Prior probability that a recording's direct path is blocked.")
+    ap.add_argument("--occlusion_scale_m", type=float, default=5.0, help="Typical extra path length (m) of an occluded arrival.")
+    ap.add_argument("--blunder_prob", type=float, default=0.05, help="Prior probability that a pick is simply wrong (either sign).")
+    ap.add_argument("--max_detour_m", type=float, default=30.0, help="Largest extra path an occluded arrival may have when associating onsets.")
     ap.add_argument("--search_radius_m", type=float, default=None, help="Search this far beyond the array (default max(200, 3x extent)).")
     ap.add_argument("--grid_res_m", type=float, default=None, help="Grid resolution for initialization (default auto).")
     ap.add_argument("--gcc_weight", choices=("phat", "cc", "scot"), default="phat", help="Cross-correlation weighting for refinement.")
@@ -1538,6 +1791,11 @@ def params_from_args(args) -> PipelineParams:
         source_z_sigma=args.source_height_sigma_m,
         source_z_bounds=(float(args.source_height_bounds[0]), float(args.source_height_bounds[1])),
         huber_k_s=args.huber_k_ms / 1000.0,
+        occlusion=not args.no_occlusion,
+        occlusion_prob=args.occlusion_prob,
+        occlusion_scale_m=args.occlusion_scale_m,
+        blunder_prob=args.blunder_prob,
+        max_detour_m=args.max_detour_m,
         timing_sigma_s=args.timing_sigma_ms / 1000.0,
         gcc_weighting=args.gcc_weight,
         refine=not args.no_refine,
@@ -1585,7 +1843,7 @@ def run(args) -> dict:
     )
     for tr, fn in zip(res["tracks"], files):
         if tr.used:
-            log(f"{os.path.basename(fn)}: arrival={tr.arrival_s:.6f}s snr={tr.snr:.1f} residual={tr.residual_s*1000:+.3f} ms" + (f" ({tr.note})" if tr.note else ""))
+            log(f"{os.path.basename(fn)}: arrival={tr.arrival_s:.6f}s snr={tr.snr:.1f} residual={tr.residual_s*1000:+.3f} ms weight={tr.weight:.2f}" + (f" ({tr.note})" if tr.note else ""))
         else:
             log(f"{os.path.basename(fn)}: not used ({tr.note})")
     e = results["confidence_ellipse_95"]
