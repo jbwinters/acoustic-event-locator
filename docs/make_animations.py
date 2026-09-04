@@ -244,13 +244,18 @@ def render_scenario(name, out_path, fps=15, dpi=80, seed=0):
     fig.suptitle(textwrap.fill(f"{name}: {S['description']}", 120), fontsize=9.5)
     fig.subplots_adjust(top=0.86, bottom=0.1, left=0.07, right=0.98)
 
-    extra = [src] + [np.array([a["x"], a["y"]]) for a in sol.alternatives]
+    alts = [a for a in sol.alternatives if a["delta_cost"] <= 3.0]  # only near-equivalent explanations
+    extra = [src] + [np.array([a["x"], a["y"]]) for a in alts]
     set_map_limits(ax, XYZ, extra, pad=14)
     ax.set_xlabel("x east (m)")
     ax.set_ylabel("y north (m)")
     ax.grid(True, alpha=0.25)
-    colors = [C_MIC if i in used else "0.6" for i in range(len(XYZ))]
+    occluded = [used[k] for k in sol.occluded]
+    colors = [("#9467bd" if i in occluded else C_MIC) if i in used else "0.6" for i in range(len(XYZ))]
     mics = ax.scatter(XYZ[:, 0], XYZ[:, 1], marker="^", s=80, c=colors, zorder=5)
+    if occluded:
+        ax.scatter(XYZ[occluded, 0], XYZ[occluded, 1], marker="^", s=200, facecolors="none", edgecolors="#9467bd", lw=1.5, zorder=4,
+                   label="occluded: late arrival explained as a detour")
     for i, (x, y, _) in enumerate(XYZ):
         ax.annotate(S["labels"][i], (x, y), textcoords="offset points", xytext=(5, 5), fontsize=8)
     ax.scatter([src[0]], [src[1]], marker="*", s=160, c=C_TRUE, zorder=6, label="true source")
@@ -302,20 +307,24 @@ def render_scenario(name, out_path, fps=15, dpi=80, seed=0):
             wave.set_visible(False)
             ax.add_patch(ellipse_patch(sol, color=C_EST, lw=2.0, zorder=9))
             ax.scatter([sol.s_xy[0]], [sol.s_xy[1]], marker="*", s=200, c=C_EST, edgecolors="k", zorder=10, label="estimate + 95% ellipse")
-            if sol.alternatives:
-                ax.scatter([a["x"] for a in sol.alternatives], [a["y"] for a in sol.alternatives], marker="o", s=90,
+            if alts:
+                ax.scatter([a["x"] for a in alts], [a["y"] for a in alts], marker="o", s=90,
                            facecolors="none", edgecolors=C_ALT, lw=1.5, zorder=9, label="alternative solution")
             err = np.linalg.norm(sol.s_xy - src[:2])
-            near = min([err] + [np.linalg.norm(np.array([a["x"], a["y"]]) - src[:2]) for a in sol.alternatives])
+            near = min([err] + [np.linalg.norm(np.array([a["x"], a["y"]]) - src[:2]) for a in alts])
             a_, b_, _ = le.ellipse_from_cov2(sol.cov_xy)
             msg = f"estimate: {err:.2f} m from the true source, 95% ellipse {2*a_:.2f} x {2*b_:.2f} m"
             if sol.ambiguous:
-                msg += f"\ncollinear cameras: mirror solution also reported, nearest one {near:.2f} m from truth"
+                msg += f"\nambiguous: alternative solution also reported, nearest one {near:.2f} m from truth"
             if sol.solve_z:
                 msg += f"\nheight solved: {sol.s_xyz[2]:.1f} m (true {src[2]:.1f} m), std {sol.z_std:.2f} m"
+            if sol.occluded:
+                det = ", ".join(f"{S['labels'][used[k]]} +{sol.detour_m[k]:.0f} m" for k in sol.occluded)
+                msg += f"\noccluded (late, down-weighted): {det}"
             title.set_text(msg)
             title.set_fontsize(8.5)
-            ax.legend(loc="best", fontsize=8)
+            fig.subplots_adjust(top=0.86 - 0.025 * max(0, msg.count("\n") - 1), bottom=0.17)
+            ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.11), ncol=2, fontsize=8, frameon=False)
             if axz is not None:
                 axz.errorbar([sol.s_xy[0]], [sol.s_xyz[2]], yerr=[[2 * sol.z_std], [2 * sol.z_std]], fmt="*", ms=14,
                              capsize=4, color=C_EST, zorder=6, label="estimated height (95%)")

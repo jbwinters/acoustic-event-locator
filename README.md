@@ -42,6 +42,10 @@ is computed by the same generator and locator code the tests run
   [Limitations](#limitations-and-roadmap).
 - Cameras in a straight line produce a mirror-image ambiguity. Both solutions are reported and
   the result is flagged `ambiguous`.
+- **Blocked lines of sight are modeled, not ignored.** An obstacle can delay an arrival but
+  never advance it, so late arrivals are explained as detours and reported with their implied
+  extra path length, impossible early arrivals are treated as mis-picks, and the position rests
+  on the direct-path recordings. See [Occlusion](#occlusion).
 - **Height is optional and honest.** The event height can be fixed, given a prior, or solved
   freely (`--source_height_sigma_m`), and any recording's height can be marked uncertain
   (`height_sigma_m`). Whether the height is actually observable depends on the vertical
@@ -59,7 +63,7 @@ python generate_test_data.py                # synthetic scenarios (WAV; no ffmpe
 python locate_event.py --videos_dir test_data/scenario1_gunshot \
                        --positions test_data/scenario1_gunshot/positions.json --out out/gunshot
 python run_test_scenarios.py                # score all scenarios against their ground truth
-python -m pytest                            # 157 tests, ~45 s
+python -m pytest                            # 183 tests, ~90 s
 ```
 
 ffmpeg is only needed to read video files. If it is missing, generate the test data as WAV
@@ -105,9 +109,9 @@ listed in `positions.json` is missing but a `.wav` with the same stem exists, th
 
 - `results.json`: `event_location_local_m`, `event_location_wgs84`, `confidence_ellipse_95`,
   `position_std_m`, `emission_time_s`, `clock_model`, `fit` (chi-square, degrees of freedom,
-  uncertainty scale, convergence, ambiguity flag, alternative solutions, rejected recordings),
-  `per_recording` (arrival time, clock offset, alignment offset, onset SNR, residual, weight,
-  notes), `refinement` (pairwise cross-correlation lags and quality), `warnings`, `parameters`.
+  uncertainty scale, convergence, ambiguity flag, alternative solutions, occluded and rejected
+  recordings, number of direct-path recordings), `per_recording` (arrival time, clock offset,
+  alignment offset, onset SNR, residual, weight, occlusion probability, implied detour, notes), `refinement` (pairwise cross-correlation lags and quality), `warnings`, `parameters`.
 - `sync.csv`: one row per recording with `arrival_time_s`, `clock_offset_s`,
   `align_to_event_offset_s` (seek offset that puts the event at t = 0) and the residual.
 - `layout.png`: recordings, estimate, 95% ellipse, alternative minima, unused recordings; when
@@ -119,7 +123,8 @@ listed in `positions.json` is missing but a `.wav` with the same stem exists, th
 
 Read the `warnings` list. The locator prefers a clear failure or a flagged result to a silent
 wrong answer; the flags that matter are `ambiguous`, `at_search_boundary`, `degenerate`, a
-relaxed detection threshold, and an uncertainty scale well above 1.
+relaxed detection threshold, occluded or mis-picked recordings leaving few direct-path
+recordings, and an uncertainty scale well above 1.
 
 ## How it works
 
@@ -139,14 +144,52 @@ relaxed detection threshold, and an uncertainty scale well above 1.
    sub-sample interpolation, fused by weighted least squares into consistent arrival times.
    Pairs without a clear correlation peak are ignored and reported.
 6. **Solve**: `t_i = t0 + |s - x_i| / c + delta_i`. Vectorized grid search over a wide area,
-   multi-start Levenberg-Marquardt with Huber reweighting, bounded to the search area. A bad
-   arrival is rejected when at least 4 recordings remain, either from its residual or from a
-   leave-one-out check that catches an arrival the fit would otherwise absorb by moving the
-   source. Distinct minima outside the 95% ellipse of the best solution are reported as
-   alternatives.
+   multi-start Levenberg-Marquardt bounded to the search area. The residual model is a
+   three-way mixture: direct arrival (Gaussian), occluded arrival (late by an exponential extra
+   path), or mis-pick (uniform, either sign); its exact IRLS weights make late arrivals pull
+   almost nothing and early impossibilities weigh zero. A search over 4- and 3-recording subsets
+   finds the direct-path set when the symmetric fit would settle on a compromise; competing
+   explanations are refined under the same loss and reported as alternatives. Once classified,
+   the position is re-fitted on the direct-path recordings alone. `--no_occlusion` gives the
+   older symmetric Huber loss with residual and leave-one-out rejection.
 7. **Uncertainty**: covariance from the full Fisher matrix (position, emission time, offsets)
    with per-recording timing sigmas (`--timing_sigma_ms`, scaled up for weaker onsets), inflated
    by the reduced chi-square when the residuals exceed the assumed timing noise.
+
+## Occlusion
+
+A building between the event and a camera does not silence the recording; the sound diffracts
+around the corner or arrives off a facade, later by the detour divided by c (a parked truck is
+about 3 ms, a building corner 9 ms, around a block 30 ms) and with its high frequencies stripped.
+That asymmetry is what the solver uses: a residual can be late for a physical reason but never
+early. Measured on synthetic data with 0.2 to 0.3 ms timing noise:
+
+| Case | Result |
+|---|---|
+| 6 recordings, one late by 3, 9 or 30 ms | 4 cm; the recording is flagged with a 1.0, 3.1 or 10.3 m detour |
+| 6 recordings, two late (30 and 15 ms) | 3 cm, both flagged |
+| 7 recordings, three late | 0.15 m, all three flagged |
+| 7 recordings, two mild 1.5 to 2 m detours | 0.00 m, both flagged (6 of 6 seeds) |
+| 6 recordings, one impossibly early (mis-pick) | 4 cm, the pick is down-weighted to zero |
+| 4 recordings, one late by 30 ms | 1 cm (the symmetric fit ran 511 m away) |
+| 6 recordings, three late; 7 recordings, four late | ambiguous: with only three direct-path recordings several explanations fit, the result is flagged and the true position is among the alternatives |
+| Urban canyon scenario (7 cameras, 3 behind buildings) | 0.00 m, all three identified; `--no_occlusion` also lands at 0.00 m here by rejecting them, but reports nothing about why |
+
+Rules of thumb: you need four direct-path recordings for an unambiguous answer, so bring
+redundancy; rooftop cameras are rarely occluded; and the reported detour length (residual times
+c) is something a person with a map can check against the buildings.
+
+Two caveats. The classification trusts `--timing_sigma_ms`: if the real timing noise is several
+times larger than assumed, ordinary scatter can be read as small detours, and the solution is
+then flagged as resting on few recordings rather than being inflated the way the symmetric mode
+does. And when several explanations are feasible the model prefers the one with the least
+total detour, which is a prior, not knowledge; the alternatives list is what to look at.
+Building footprints (line of sight per candidate position) would turn the prior into a model
+and are the natural next step once there is real urban data.
+
+Options: `--occlusion_prob` (prior that a camera is blocked, 0.2), `--occlusion_scale_m`
+(typical extra path, 5 m), `--blunder_prob` (prior that a pick is wrong, 0.05),
+`--max_detour_m` (largest detour admitted when associating onsets, 30 m), `--no_occlusion`.
 
 ## Heights and 3D
 
@@ -206,6 +249,7 @@ to what your picks actually achieve (0.5 to 2 ms is typical) so the ellipse stay
 | Explosion, factory fence | 88 m straight line | 5 | 0.00 m to the nearest of two mirror solutions, flagged ambiguous | 1.5 x 0.3 m |
 | Fireworks, 25 m aerial burst | L-shape, 50 x 44 m | 6 | 0.00 m | 0.73 x 0.33 m |
 | Window shot, 9 m up, mixed cameras | 60 x 55 m, heights 1.2 to 22 m | 7 | 0.05 m | 0.35 x 0.29 m |
+| Urban canyon, 3 of 7 cameras occluded | 65 x 65 m | 7 | 0.00 m, 3/3 occluded identified | 1.00 x 0.32 m |
 
 With clock offsets drawn from N(0, 2 ms) and `--clock_sigma_ms 2`: gunshot 1.40 m, fireworks
 0.21 m, both inside their ellipses.
@@ -222,6 +266,10 @@ height prior and the solved height.
 | ![scenario 1](docs/anim/scenario1_gunshot.gif) | ![scenario 2](docs/anim/scenario2_explosion.gif) |
 | **Fireworks 25 m up, height solved from a 20 ± 30 m prior** | **Shot from a 9 m window, phones with 1.5 ± 0.5 m heights plus surveyed cameras** |
 | ![scenario 3](docs/anim/scenario3_fireworks.gif) | ![scenario 4](docs/anim/scenario4_window_shot.gif) |
+
+| Urban canyon, three cameras behind buildings (purple: late arrivals treated as detours) |
+|---|
+| ![](docs/anim/scenario5_urban_canyon.gif) |
 
 **Signal-to-noise** (gunshot inside a 20 m square, 4 recordings, 12 trials per row):
 
@@ -264,7 +312,12 @@ Runtime is about 0.1 s for six 10 s recordings after audio loading.
 | `--source_height_sigma_m` | 0 | Prior std of the event height; > 0 solves the height |
 | `--source_height_bounds MIN MAX` | 0 5000 | Allowed height range when solving it |
 | `--timing_sigma_ms` | 0.5 | Assumed timing noise of the strongest recording |
-| `--huber_k_ms` | 2 | Residuals beyond this are down-weighted; 3x this rejects |
+| `--huber_k_ms` | 2 | Huber threshold of the symmetric loss (`--no_occlusion`); 3x this rejects |
+| `--no_occlusion` | | Symmetric robust loss instead of the occlusion mixture |
+| `--occlusion_prob` | 0.2 | Prior probability that a recording's direct path is blocked |
+| `--occlusion_scale_m` | 5 | Typical extra path length of an occluded arrival |
+| `--blunder_prob` | 0.05 | Prior probability that a pick is simply wrong |
+| `--max_detour_m` | 30 | Largest detour admitted when associating onsets |
 | `--search_radius_m` | max(200, 3x array extent) | Search area beyond the array |
 | `--grid_res_m` | auto | Initial grid resolution |
 | `--gcc_weight` | phat | `phat`, `cc` or `scot` weighting for refinement |
@@ -300,8 +353,10 @@ The suite asserts against ground truth with centimeter and sub-0.1 ms tolerances
 filters and pickers, cross-correlation, association, the solver (perfect data, Monte Carlo
 coverage of the 95% ellipse, outliers, clock prior, mirror ambiguity, heights, validation),
 event-height and recording-height priors (recovery, 3D coverage, the below-plane mirror,
-vertical aperture), the in-memory pipeline, and the command line end to end on WAV input,
-including the four checked-in scenarios generated on the fly. See [tests/README.md](tests/README.md).
+vertical aperture), occlusion (the mixture loss, late and early outliers, subset search,
+coverage under random detours, no false flags on clean data), the in-memory pipeline, and the
+command line end to end on WAV input, including the five checked-in scenarios generated on the
+fly. See [tests/README.md](tests/README.md).
 
 ## Limitations and roadmap
 
@@ -311,6 +366,9 @@ including the four checked-in scenarios generated on the fly. See [tests/README.
 - Height observability depends on vertical aperture; with cameras all near one height the
   solved height of a ground-level event is uninformative (the std says so).
 - No wind or temperature-gradient model; the speed of sound is a single number.
+- Occlusion is handled statistically (late is possible, early is not). With three or fewer
+  direct-path recordings the explanation is ambiguous and reported as such; building footprints
+  would resolve it.
 - Not validated on real recordings. Clipping, automatic gain control, microphone directivity
   and reverberation will degrade timing precision below the synthetic figures above.
 

@@ -125,7 +125,7 @@ def main(argv=None) -> int:
         flag = "" if scored <= args.max_error_m else "  <-- exceeds limit"
         failed |= scored > args.max_error_m
         off = f"{s['offset_err_ms']:.2f} ms" if s["offset_err_ms"] is not None else "-"
-        amb = " (ambiguous: mirror solution also reported)" if s["ambiguous"] else ""
+        amb = " (ambiguous: alternative solution also reported)" if s["ambiguous"] else ""
         zcol = f"{s['z_err_m']:+6.2f} +- {s['z_std_m']:5.2f} m" if s["z_solved"] else "fixed (truth)"
         if s["true_occluded"] or s["detected_occluded"]:
             ok = s["true_occluded"] == s["detected_occluded"]

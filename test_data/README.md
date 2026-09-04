@@ -28,6 +28,7 @@ scorer passes with `--z prior`.
 | `scenario1_gunshot` | gunshot, 1.2 m high | 4 cameras on the corners of a 17 x 22 m intersection | good geometry, source off-center |
 | `scenario2_explosion` | explosion at ground level | 5 cameras in an 88 m straight line | collinear: the mirror solution is reported as an alternative |
 | `scenario3_fireworks` | aerial burst 25 m up | 6 cameras in an L (50 x 44 m) | event height solved from a 20 ± 30 m prior |
+| `scenario5_urban_canyon` | gunshot at street level | 7 cameras around a block, 3 of them behind buildings (`occlusion_detour_m` 4, 7 and 12 m) | occlusion: late, low-passed arrivals must be identified, not averaged in |
 | `scenario4_window_shot` | gunshot from a window 9 m up | 4 phones (height 1.5 ± 0.5 m, true 1.2 to 1.8 m), doorbell 1.4 m, mast 6 m, rooftop 22 m | uncertain recording heights (`height_sigma_m`, `true_height_m`) plus a 5 ± 10 m event-height prior |
 
 ## What the generator models
@@ -37,6 +38,8 @@ scorer passes with `--z prior`.
 - independent white background noise per recording (`--noise_rms`, default 0.003 ≈ -50 dBFS)
 - per-recording clock offsets (`--clock_offsets_ms` or `--random_clock_ms`)
 - one to three early reflections per recording with random delay (8 to 60 ms) and gain
+- occlusion per recording (`occlusion_detour_m`): arrival delayed by the detour, waveform
+  low-passed at 1.2 kHz and attenuated 6 dB
 - event waveforms: gunshot (broadband decaying burst plus low-frequency push), explosion
   (shock front plus 40 to 1500 Hz rumble), fireworks (report followed by a second of crackles)
 
@@ -48,7 +51,7 @@ control. Waveforms are identical at every recording apart from noise and echoes.
 `source_position_m` (x east, y north in the same local frame the locator uses, i.e. relative to
 `reference`/`reference_point`, else the centroid), `source_height_m`, `source_latlon`,
 `microphone_positions_m` (true x, y, z), `microphone_height_prior_m`, `microphone_height_sigma_m`,
-`height_prior_m`, `clock_offsets_s`, `arrival_times_s` (true arrival of the
+`height_prior_m`, `occlusion_detour_m`, `clock_offsets_s`, `arrival_times_s` (true arrival of the
 event in each track, on that recording's own clock), `emission_time_s`, `distances_m`,
 `snr_db` (peak signal over noise RMS), `reflections`, `speed_of_sound_ms`, `sample_rate_hz`,
 `duration_s`, `files`, `format`, `seed`.
